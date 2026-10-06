@@ -11,8 +11,8 @@ let publicBase: string;
 beforeAll(async () => {
   // src modules are imported dynamically so the test environment is set up first
   ctx = await boot();
-  const qrModule = await import('../src/qr');
-  const configModule = await import('../src/config');
+  const qrModule = await import('../src/qr.js');
+  const configModule = await import('../src/config.js');
   renderQr = qrModule.renderQr;
   publicBase = configModule.config.publicBaseUrl.replace(/\/$/, '');
 });

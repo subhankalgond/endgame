@@ -11,13 +11,13 @@ import request from 'supertest';
 export interface Ctx {
   app: Express;
   tokens: Record<number, string[]>;
-  db: typeof import('../src/db').db;
+  db: typeof import('../src/db.js').db;
 }
 
 export async function boot(): Promise<Ctx> {
-  const appModule = await import('../src/app');
-  const dbModule = await import('../src/db');
-  const seedModule = await import('../src/seed');
+  const appModule = await import('../src/app.js');
+  const dbModule = await import('../src/db.js');
+  const seedModule = await import('../src/seed.js');
   const app = await appModule.createApp();
   return { app, tokens: seedModule.TEAM_TOKENS, db: dbModule.db };
 }
