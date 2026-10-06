@@ -1,0 +1,28 @@
+{
+  "name": "endgame-mainframe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ENDGAME - Round 1: THE MAINFRAME. Live college-fest team competition system.",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c yellow,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w server && npm run build -w client",
+    "start": "npm run start -w server",
+    "lint": "npm run lint -w server && npm run lint -w client",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
+    "test": "npm run test -w server",
+    "smoke": "node scripts/smoke.mjs",
+    "check:security": "node scripts/security-check.mjs",
+    "icons": "node scripts/make-icons.mjs",
+    "audit:secrets": "node scripts/secret-scan.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20.11"
+  }
+}
