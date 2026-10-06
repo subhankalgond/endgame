@@ -257,6 +257,15 @@ function WaitingRoom({
             ? 'All players connected. Prepare yourselves…'
             : `Waiting for ${missing} more player${missing === 1 ? '' : 's'}…`}
         </p>
+        {joined === 4 && payload.round.state !== 'ACTIVE' ? (
+          <div className="notice notice-ok" style={{ marginTop: 12 }}>
+            <strong>TEAM READY — ALL 4 PLAYERS CONNECTED</strong>
+            <p className="hint" style={{ margin: '8px 0 0' }}>
+              Round 1 begins from the control desk, and it also starts automatically once all 8 teams are
+              complete. Keep this screen open — puzzles appear here the moment it starts.
+            </p>
+          </div>
+        ) : null}
         <p className="hint">
           The round starts from the server. There is no start button — stay on this screen.
         </p>

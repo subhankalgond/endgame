@@ -31,6 +31,13 @@ export const config = {
   adminPassword: env('ADMIN_PASSWORD', ''),
   roundDurationSec: Number(env('ROUND_DURATION_SEC', '600')),
   trustProxy: env('TRUST_PROXY', '0') === '1',
+  // Round 1 starts by itself once every seeded team has all four players, so a
+  // complete event can never sit stuck on the waiting screen. Set
+  // AUTO_START_ROUND=0 to require the admin "Start round" button instead.
+  autoStartRound: env('AUTO_START_ROUND', nodeEnv === 'production' ? '1' : '0') === '1',
+  // Public origin pinged every 5 minutes so free hosting (Render) never sleeps.
+  // Empty outside production; override with KEEP_ALIVE_URL when the public URL differs.
+  keepAliveUrl: process.env.KEEP_ALIVE_URL ?? (nodeEnv === 'production' ? 'https://endgame-bf02.onrender.com' : ''),
   /** Rate limits are relaxed only for automated tests so fixtures are not throttled. */
   rateLimitFactor: nodeEnv === 'test' ? 1000 : 1,
 };

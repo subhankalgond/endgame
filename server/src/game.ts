@@ -1,5 +1,6 @@
 import { randomInt } from 'node:crypto';
 import { audit, db, nowMs } from './db';
+import { config } from './config';
 import { httpError } from './lib/http';
 import { broadcastLive, broadcastTeam, emitToAll, emitToAdmins, emitToTeam } from './realtime';
 
@@ -90,7 +91,7 @@ export async function prepareRound(actorId: number): Promise<RoundRow> {
   return await getRound();
 }
 
-export async function startRound(actorId: number): Promise<RoundRow> {
+export async function startRound(actorId: number, source: 'admin' | 'auto' = 'admin'): Promise<RoundRow> {
   const round = await getRound();
   if (round.state === 'ACTIVE') throw httpError(409, 'Round is already active.', 'active');
   if (round.state === 'ENDED') throw httpError(409, 'Round has ended. Reset the round before starting it again.', 'ended');
@@ -101,7 +102,11 @@ export async function startRound(actorId: number): Promise<RoundRow> {
     endsAt,
     now,
   );
-  audit('round_started', 'admin', { actorId, detail: { startedAt: now, endsAt, durationSec: round.duration_sec } });
+  audit(
+    source === 'auto' ? 'round_auto_started' : 'round_started',
+    source === 'auto' ? 'system' : 'admin',
+    { actorId, detail: { startedAt: now, endsAt, durationSec: round.duration_sec, source } },
+  );
   emitToAll('round_started', { startedAt: now, endsAt, durationSec: round.duration_sec, serverTime: now });
   broadcastLive();
   return await getRound();
@@ -196,6 +201,25 @@ export async function refreshRound(): Promise<RoundRow> {
     return await endRound('expired');
   }
   return round;
+}
+
+/**
+ * Safety net for the live event: when every seeded team has all four players
+ * connected, start Round 1 automatically so a complete event never sits stuck
+ * on the waiting screen. A manual admin start always wins (this only fires
+ * from WAITING/READY); set AUTO_START_ROUND=0 to disable.
+ */
+export async function maybeAutoStartRound(force = false): Promise<boolean> {
+  if (!force && !config.autoStartRound) return false;
+  const round = await getRound();
+  if (round.state !== 'WAITING' && round.state !== 'READY') return false;
+  const counts = await db.prepare(
+    `SELECT (SELECT COUNT(*) FROM teams) AS total,
+            (SELECT COUNT(*) FROM (SELECT team_id FROM participants GROUP BY team_id HAVING COUNT(*) >= 4) ready_teams) AS ready`,
+  ).get() as { total: number; ready: number };
+  if (counts.total === 0 || counts.ready < counts.total) return false;
+  await startRound(0, 'auto');
+  return true;
 }
 
 export async function resetRound(actorId: number): Promise<RoundRow> {

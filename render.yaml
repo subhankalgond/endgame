@@ -30,6 +30,14 @@ services:
         value: "12"
       - key: ROUND_DURATION_SEC
         value: "600"
+      # Round 1 starts itself when all 8 teams are complete (set to "0" to
+      # require the admin "Start round" button instead).
+      - key: AUTO_START_ROUND
+        value: "1"
+      # Public origin pinged every 5 min so Render never sleeps. Defaults to
+      # this deployment's public URL; override only if the domain changes.
+      - key: KEEP_ALIVE_URL
+        sync: false
       - key: ADMIN_USERNAME
         value: admin
       - key: ADMIN_PASSWORD

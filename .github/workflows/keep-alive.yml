@@ -1,0 +1,38 @@
+# Keep-alive job: hits the backend health endpoint every 5 minutes so the
+# Render free instance never sleeps (it spins down after ~15 idle minutes,
+# which made pages take 30+ seconds to load).
+#
+# Notes:
+# - GitHub cron can drift by a few minutes; the server also self-pings
+#   (server/src/keepalive.ts), so between the two the instance stays warm.
+# - Runs appear in the Actions tab, so the ping history is visible there.
+name: Keep Render awake
+
+on:
+  schedule:
+    - cron: '*/5 * * * *' # every 5 minutes (GitHub minimum)
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        run: |
+          url="https://endgame-bf02.onrender.com/api/health"
+          for attempt in 1 2 3; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$url" || true)
+            echo "attempt $attempt -> HTTP $code"
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::keep-alive ping did not return 200 after 3 attempts (backend may be restarting)"

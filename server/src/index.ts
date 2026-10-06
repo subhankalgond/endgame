@@ -3,7 +3,8 @@ import { createSocketServer } from './socket';
 import { createApp } from './app';
 import { config } from './config';
 import { purgeExpiredSessions } from './lib/session';
-import { refreshRound } from './game';
+import { maybeAutoStartRound, refreshRound } from './game';
+import { startKeepAlive } from './keepalive';
 
 async function main(): Promise<void> {
   const app = await createApp();
@@ -11,7 +12,11 @@ async function main(): Promise<void> {
   const io = createSocketServer(server);
 
   const tick = setInterval(() => {
-    void refreshRound().catch((err: unknown) => {
+    void (async () => {
+      await refreshRound();
+      // Auto-start once every team is complete so nobody waits on a stuck lobby.
+      await maybeAutoStartRound();
+    })().catch((err: unknown) => {
       console.error('[endgame] round tick failed:', err);
     });
   }, 1000);
@@ -27,6 +32,8 @@ async function main(): Promise<void> {
   server.listen(config.port, () => {
     console.warn(`[endgame] server listening on http://localhost:${config.port}`);
   });
+
+  startKeepAlive();
 
   function shutdown(): void {
     clearInterval(tick);

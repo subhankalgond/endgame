@@ -97,6 +97,13 @@ export default function AdminRound() {
         <div className={`notice ${message.kind === 'ok' ? 'notice-ok' : 'notice-error'}`}>{message.text}</div>
       )}
 
+      {(state === 'WAITING' || state === 'READY') && readyTeams > 0 ? (
+        <div className="notice notice-warn">
+          <strong>{readyTeams}/8 teams ready</strong> — players on those teams are waiting on this round. Press
+          “Start round” below, or the round starts automatically when all 8 teams are complete.
+        </div>
+      ) : null}
+
       <div className="panel">
         <div className="panel-head">
           <span className="eyebrow">Controls</span>

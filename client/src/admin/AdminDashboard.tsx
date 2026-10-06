@@ -88,6 +88,14 @@ export default function AdminDashboard() {
 
       {error && <div className="notice notice-error">{error}</div>}
 
+      {round && round.state !== 'ACTIVE' && (data?.readyTeams ?? 0) > 0 ? (
+        <div className="notice notice-warn">
+          <strong>{data?.readyTeams}/8 teams ready</strong> — every ready team is waiting on their game screen.
+          Press “Start round” under Round control, or the round starts automatically when all 8 teams are
+          complete.
+        </div>
+      ) : null}
+
       <div className="grid-4">
         <div className="stat">
           <div className="stat-label">Participants</div>
