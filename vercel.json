@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm run build -w client",
+  "buildCommand": "npm run build -w client && cp -r client/dist dist",
   "outputDirectory": "client/dist",
   "installCommand": "npm ci",
   "framework": null,
