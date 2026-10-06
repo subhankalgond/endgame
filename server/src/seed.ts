@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { db, nowMs, audit, flushAudit } from './db';
-import { hashPassword } from './lib/password';
+import { hashPassword, verifyPassword } from './lib/password';
 import { recordJoinToken } from './tokens';
 import { config } from './config';
 
@@ -157,6 +157,31 @@ export async function seedDatabase(): Promise<void> {
     await flushAudit();
     if (generated) {
       console.warn(`[endgame] No ADMIN_PASSWORD set. Generated one-time admin password: ${password}`);
+    }
+  }
+
+  // Keep the admin account in sync with the environment: ADMIN_PASSWORD is the
+  // source of truth. Updates the hash when env and DB drift (e.g. after changing
+  // the env var post-seed), and inserts the env admin if it does not exist yet.
+  if (config.adminPassword) {
+    const envAdmin = await db
+      .prepare('SELECT id, password_hash FROM admins WHERE username = ?')
+      .get(config.adminUsername) as { id: number; password_hash: string } | undefined;
+    if (envAdmin && !verifyPassword(config.adminPassword, envAdmin.password_hash)) {
+      await db.prepare('UPDATE admins SET password_hash = ? WHERE id = ?').run(
+        hashPassword(config.adminPassword),
+        envAdmin.id,
+      );
+      audit('admin_password_synced', 'system', { detail: { username: config.adminUsername } });
+      await flushAudit();
+    } else if (!envAdmin) {
+      await db.prepare('INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)').run(
+        config.adminUsername,
+        hashPassword(config.adminPassword),
+        now,
+      );
+      audit('admin_seeded', 'system', { detail: { username: config.adminUsername } });
+      await flushAudit();
     }
   }
 
