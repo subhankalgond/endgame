@@ -99,8 +99,9 @@ export default function AdminRound() {
 
       {(state === 'WAITING' || state === 'READY') && readyTeams > 0 ? (
         <div className="notice notice-warn">
-          <strong>{readyTeams}/8 teams ready</strong> — players on those teams are waiting on this round. Press
-          “Start round” below, or the round starts automatically when all 8 teams are complete.
+          <strong>{readyTeams}/8 teams ready</strong> — those players are waiting on their game screens. The
+          round starts automatically a few seconds after the first team fills up; “Start round” below starts
+          it right now.
         </div>
       ) : null}
 

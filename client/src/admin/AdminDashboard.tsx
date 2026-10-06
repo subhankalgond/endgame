@@ -90,9 +90,9 @@ export default function AdminDashboard() {
 
       {round && round.state !== 'ACTIVE' && (data?.readyTeams ?? 0) > 0 ? (
         <div className="notice notice-warn">
-          <strong>{data?.readyTeams}/8 teams ready</strong> — every ready team is waiting on their game screen.
-          Press “Start round” under Round control, or the round starts automatically when all 8 teams are
-          complete.
+          <strong>{data?.readyTeams}/8 teams ready</strong> — ready teams are waiting on their game screens.
+          The round starts automatically a few seconds after the first team fills up; “Start round” under
+          Round control starts it right now.
         </div>
       ) : null}
 

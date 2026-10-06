@@ -18,23 +18,34 @@ describe('round auto-start', () => {
     expect(config.autoStartRound).toBe(false);
   });
 
-  it('does nothing while any team is incomplete, even when forced', async () => {
+  it('does nothing while no team is complete', async () => {
     await fillTeam(ctx, 2, ['Auto A', 'Auto B', 'Auto C', 'Auto D']);
     const { maybeAutoStartRound } = await import('../src/game.js');
+    // 1/8 teams ready, but the 20s grace window has not elapsed yet
     expect(await maybeAutoStartRound(true)).toBe(false);
     const round = await ctx.db.prepare('SELECT state FROM rounds WHERE id = 1').get() as { state: string };
     expect(['WAITING', 'READY']).toContain(round.state);
   });
 
-  it('starts the round automatically once every team has all four players', async () => {
+  it('starts for everyone after the grace window once the first team fills up', async () => {
     await fillTeam(ctx, 3, ['Auto E', 'Auto F', 'Auto G', 'Auto H']);
     const { maybeAutoStartRound } = await import('../src/game.js');
-    expect(await maybeAutoStartRound(true)).toBe(false); // 2 of 8 teams ready
+    // Backdate every join past the 20s grace window.
+    await ctx.db.prepare('UPDATE participants SET joined_at = joined_at - 60_000').run();
+    expect(await maybeAutoStartRound(true)).toBe(true);
+    const round = await ctx.db.prepare('SELECT state FROM rounds WHERE id = 1').get() as { state: string };
+    expect(round.state).toBe('ACTIVE');
+    // Put the round back so the all-teams scenario can be exercised too.
+    await ctx.db
+      .prepare("UPDATE rounds SET state = 'WAITING', started_at = NULL, ends_at = NULL, ended_at = NULL WHERE id = 1")
+      .run();
+  });
 
+  it('starts immediately when every team has all four players', async () => {
     for (const teamId of [1, 4, 5, 6, 7, 8]) {
       await fillTeam(ctx, teamId, [`T${teamId} A`, `T${teamId} B`, `T${teamId} C`, `T${teamId} D`]);
     }
-
+    const { maybeAutoStartRound } = await import('../src/game.js');
     expect(await maybeAutoStartRound(true)).toBe(true);
     const round = await ctx.db.prepare('SELECT state, started_at, ends_at FROM rounds WHERE id = 1').get() as {
       state: string;
@@ -45,13 +56,13 @@ describe('round auto-start', () => {
     expect(round.started_at).not.toBeNull();
     expect(round.ends_at).not.toBeNull();
 
-    // the auto start is audited and never fires twice
+    // Each start is audited and a running round is never started twice.
     const { flushAudit } = await import('../src/db.js');
     await flushAudit();
     const auditRow = await ctx.db
       .prepare("SELECT COUNT(*) AS c FROM audit_logs WHERE event = 'round_auto_started'")
       .get() as { c: number };
-    expect(auditRow.c).toBe(1);
+    expect(auditRow.c).toBe(2);
     expect(await maybeAutoStartRound(true)).toBe(false);
   });
 });

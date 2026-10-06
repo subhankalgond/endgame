@@ -35,6 +35,9 @@ export const config = {
   // complete event can never sit stuck on the waiting screen. Set
   // AUTO_START_ROUND=0 to require the admin "Start round" button instead.
   autoStartRound: env('AUTO_START_ROUND', nodeEnv === 'production' ? '1' : '0') === '1',
+  // Seconds a team stays in the ready state before its round countdown begins.
+  // Gives the last player a moment to land on their screen; 0 = start instantly.
+  autoStartGraceSec: Number(env('AUTO_START_GRACE_SEC', '20')),
   // Public origin pinged every 5 minutes so free hosting (Render) never sleeps.
   // Empty outside production; override with KEEP_ALIVE_URL when the public URL differs.
   keepAliveUrl: process.env.KEEP_ALIVE_URL ?? (nodeEnv === 'production' ? 'https://endgame-bf02.onrender.com' : ''),

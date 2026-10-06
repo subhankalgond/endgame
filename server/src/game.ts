@@ -204,10 +204,15 @@ export async function refreshRound(): Promise<RoundRow> {
 }
 
 /**
- * Safety net for the live event: when every seeded team has all four players
- * connected, start Round 1 automatically so a complete event never sits stuck
- * on the waiting screen. A manual admin start always wins (this only fires
- * from WAITING/READY); set AUTO_START_ROUND=0 to disable.
+ * Safety net for the live event: the round starts by itself once teams are
+ * complete, so players never sit stuck on the waiting screen.
+ *
+ * Rules:
+ *  - If EVERY seeded team has all four players -> start immediately.
+ *  - Otherwise, start for everyone once the FIRST team has been fully
+ *    complete (4/4 joined) for AUTO_START_GRACE_SEC seconds (default 20s),
+ *    and admin Start still works at any time.
+ * Set AUTO_START_ROUND=0 to disable auto-start entirely.
  */
 export async function maybeAutoStartRound(force = false): Promise<boolean> {
   if (!force && !config.autoStartRound) return false;
@@ -217,7 +222,18 @@ export async function maybeAutoStartRound(force = false): Promise<boolean> {
     `SELECT (SELECT COUNT(*) FROM teams) AS total,
             (SELECT COUNT(*) FROM (SELECT team_id FROM participants GROUP BY team_id HAVING COUNT(*) >= 4) ready_teams) AS ready`,
   ).get() as { total: number; ready: number };
-  if (counts.total === 0 || counts.ready < counts.total) return false;
+  if (counts.total === 0 || counts.ready === 0) return false;
+  if (counts.ready < counts.total) {
+    if (config.autoStartGraceSec <= 0) {
+      await startRound(0, 'auto');
+      return true;
+    }
+    const oldest = await db.prepare(
+      'SELECT MIN(m) AS t FROM (SELECT MAX(joined_at) AS m FROM participants GROUP BY team_id HAVING COUNT(*) >= 4) completions',
+    ).get() as { t: number | null };
+    const readySince = oldest.t;
+    if (!readySince || nowMs() - readySince < config.autoStartGraceSec * 1000) return false;
+  }
   await startRound(0, 'auto');
   return true;
 }

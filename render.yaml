@@ -30,10 +30,13 @@ services:
         value: "12"
       - key: ROUND_DURATION_SEC
         value: "600"
-      # Round 1 starts itself when all 8 teams are complete (set to "0" to
-      # require the admin "Start round" button instead).
+      # Round 1 starts itself once the first team fills up (a short grace
+      # window lets the last player land on their screen). Set to "0" to
+      # require the admin "Start round" button instead.
       - key: AUTO_START_ROUND
         value: "1"
+      - key: AUTO_START_GRACE_SEC
+        value: "20"
       # Public origin pinged every 5 min so Render never sleeps. Defaults to
       # this deployment's public URL; override only if the domain changes.
       - key: KEEP_ALIVE_URL

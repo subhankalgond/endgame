@@ -76,7 +76,9 @@ function ConnectionBar({ connected, error }: { connected: boolean; error: string
   return (
     <div className="conn-bar conn-bar-down">
       <span className="dot dot-wait" />
-      Connection lost — trying to reconnect… your progress is preserved
+      {error
+        ? 'Connection lost — trying to reconnect… your progress is preserved'
+        : 'Live updates reconnecting — your progress is safe and the game keeps running'}
     </div>
   );
 }
@@ -261,8 +263,8 @@ function WaitingRoom({
           <div className="notice notice-ok" style={{ marginTop: 12 }}>
             <strong>TEAM READY — ALL 4 PLAYERS CONNECTED</strong>
             <p className="hint" style={{ margin: '8px 0 0' }}>
-              Round 1 begins from the control desk, and it also starts automatically once all 8 teams are
-              complete. Keep this screen open — puzzles appear here the moment it starts.
+              Round 1 starts automatically: a few seconds after your team (or any team) fills up, the timer
+              begins for everyone. Keep this screen open — puzzles appear here the moment it starts.
             </p>
           </div>
         ) : null}
