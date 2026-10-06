@@ -9,6 +9,10 @@
       "destination": "https://endgame-bf02.onrender.com/socket.io"
     },
     {
+      "source": "/socket.io/",
+      "destination": "https://endgame-bf02.onrender.com/socket.io/"
+    },
+    {
       "source": "/socket.io/:path*",
       "destination": "https://endgame-bf02.onrender.com/socket.io/:path*"
     },
