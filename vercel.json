@@ -6,11 +6,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://YOUR-RENDER-SERVICE.onrender.com/api/:path*"
+      "destination": "https://endgame-bf02.onrender.com/api/:path*"
     },
     {
       "source": "/socket.io/:path*",
-      "destination": "https://YOUR-RENDER-SERVICE.onrender.com/socket.io/:path*"
+      "destination": "https://endgame-bf02.onrender.com/socket.io/:path*"
     },
     { "source": "/:path*", "destination": "/index.html" }
   ]
