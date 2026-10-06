@@ -43,10 +43,10 @@ const nameSchema = z.object({ name: z.string().min(1).max(24) });
 const answerSchema = z.object({ answer: z.string().min(1).max(200) });
 const sequenceSchema = z.object({ sequence: z.array(z.string().min(1).max(16)).length(4) });
 
-function currentParticipantId(req: Parameters<typeof readSessionToken>[0]): string | null {
+export async function currentParticipantId(req: Parameters<typeof readSessionToken>[0]): Promise<string | null> {
   const token = readSessionToken(req, 'participant');
   if (!token) return null;
-  const row = db
+  const row = await db
     .prepare(`SELECT participant_id FROM sessions WHERE token_hash = ? AND role = 'participant'`)
     .get(hashToken(token)) as { participant_id: string | null } | undefined;
   return row?.participant_id ?? null;
@@ -58,10 +58,10 @@ function currentParticipantId(req: Parameters<typeof readSessionToken>[0]): stri
 participantRouter.get(
   '/join/:teamToken',
   joinLimiter,
-  ah((req, res) => {
+  ah(async (req, res) => {
     const token = String(req.params.teamToken ?? '');
     if (token.length < 8 || token.length > 64) throw httpError(404, 'This QR code is not valid.', 'invalid_token');
-    const team = getTeamByToken(token);
+    const team = await getTeamByToken(token);
     if (!team) throw httpError(404, 'This QR code is not valid.', 'invalid_token');
     res.json({ team: { name: team.name }, serverTime: Date.now() });
   }),
@@ -70,19 +70,19 @@ participantRouter.get(
 participantRouter.post(
   '/join/:teamToken',
   joinLimiter,
-  ah((req, res) => {
+  ah(async (req, res) => {
     const { name } = parseBody(nameSchema, req.body);
     const token = String(req.params.teamToken ?? '');
     if (token.length < 8 || token.length > 64) throw httpError(404, 'This QR code is not valid.', 'invalid_token');
 
-    const existingId = currentParticipantId(req);
-    const { participant, created } = joinTeam(token, name, existingId);
+    const existingId = await currentParticipantId(req);
+    const { participant, created } = await joinTeam(token, name, existingId);
 
     const prior = readSessionToken(req, 'participant');
-    if (prior) destroySession('participant', prior);
-    createSession(res, 'participant', { participantId: participant.id });
+    if (prior) await destroySession('participant', prior);
+    await createSession(res, 'participant', { participantId: participant.id });
 
-    res.status(created ? 201 : 200).json({ joined: created, ...participantPayload(participant) });
+    res.status(created ? 201 : 200).json({ joined: created, ...(await participantPayload(participant)) });
   }),
 );
 
@@ -91,31 +91,31 @@ participantRouter.post(
 participantRouter.get(
   '/session',
   requireParticipant,
-  ah((req, res) => {
-    res.json(participantPayload(req.participant!));
+  ah(async (req, res) => {
+    res.json(await participantPayload(req.participant!));
   }),
 );
 
 participantRouter.get(
   '/round/status',
-  ah((_req, res) => {
-    res.json(roundView(refreshRound()));
+  ah(async (_req, res) => {
+    res.json(roundView(await refreshRound()));
   }),
 );
 
 participantRouter.get(
   '/team/status',
   requireParticipant,
-  ah((req, res) => {
-    res.json(statusPayload(req.participant!));
+  ah(async (req, res) => {
+    res.json(await statusPayload(req.participant!));
   }),
 );
 
 participantRouter.get(
   '/my-puzzle',
   requireParticipant,
-  ah((req, res) => {
-    const payload = participantPayload(req.participant!);
+  ah(async (req, res) => {
+    const payload = await participantPayload(req.participant!);
     res.json({ puzzle: payload.puzzle, round: payload.round, state: payload.state, participant: payload.participant });
   }),
 );
@@ -123,16 +123,16 @@ participantRouter.get(
 participantRouter.get(
   '/team/progress',
   requireParticipant,
-  ah((req, res) => {
+  ah(async (req, res) => {
     const participant = req.participant!;
-    const team = getTeam(participant.team_id);
-    const solvedCount = teamSolvedCount(team.id);
+    const team = await getTeam(participant.team_id);
+    const solvedCount = await teamSolvedCount(team.id);
     res.json({
       team: { id: team.id, name: team.name },
-      players: playerViews(team.id),
+      players: await playerViews(team.id),
       progress: { solvedCount, allSolved: solvedCount === 4 },
       isLeader: participant.is_leader === 1,
-      state: getTeamState(team.id, refreshRound()),
+      state: await getTeamState(team.id, await refreshRound()),
     });
   }),
 );
@@ -140,9 +140,9 @@ participantRouter.get(
 participantRouter.get(
   '/team/submissions',
   requireParticipant,
-  ah((req, res) => {
+  ah(async (req, res) => {
     const participant = req.participant!;
-    const rows = db
+    const rows = await db
       .prepare(
         `SELECT submission_number, correct_positions, incorrect_positions, was_correct, created_at, elapsed_ms
          FROM final_submissions WHERE team_id = ? ORDER BY submission_number`,
@@ -175,9 +175,9 @@ participantRouter.post(
   '/puzzle/submit',
   requireParticipant,
   submitLimiter,
-  ah((req, res) => {
+  ah(async (req, res) => {
     const { answer } = parseBody(answerSchema, req.body);
-    res.json(submitPuzzleAnswer(req.participant!, answer));
+    res.json(await submitPuzzleAnswer(req.participant!, answer));
   }),
 );
 
@@ -185,9 +185,9 @@ participantRouter.post(
   '/team/final-submit',
   requireParticipant,
   submitLimiter,
-  ah((req, res) => {
+  ah(async (req, res) => {
     const { sequence } = parseBody(sequenceSchema, req.body);
-    res.json(submitFinalSequence(req.participant!, sequence));
+    res.json(await submitFinalSequence(req.participant!, sequence));
   }),
 );
 
@@ -196,9 +196,9 @@ participantRouter.post(
 participantRouter.get(
   '/results',
   requireParticipant,
-  ah((_req, res) => {
-    const round = refreshRound();
+  ah(async (_req, res) => {
+    const round = await refreshRound();
     if (round.state !== 'ENDED') throw httpError(409, 'Round 1 is still running.', 'round_active');
-    res.json({ round: roundView(round), results: getResults() });
+    res.json({ round: roundView(round), results: await getResults() });
   }),
 );

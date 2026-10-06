@@ -17,11 +17,11 @@ qualification. Nothing is faked: every number on screen comes from the database.
 | Layer      | Technology                                                          |
 | ---------- | ------------------------------------------------------------------- |
 | Frontend   | React 18 + TypeScript + Vite, Socket.IO client, react-router         |
-| Backend    | Node 20+, Express 4, TypeScript, Zod validation, Socket.IO           |
-| Database   | SQLite via Node's built-in `node:sqlite` (WAL, foreign keys)         |
+| Backend    | Node 24+, Express 4, TypeScript, Zod validation, Socket.IO           |
+| Database   | Supabase Postgres (node-pg) — embedded PGlite for local development   |
 | QR codes   | `qrcode` (PNG data URLs) — decoded in tests with `jsqr`              |
 | Auth       | HttpOnly session cookies, scrypt-hashed admin passwords              |
-| Tests      | Vitest + Supertest (35 integration/security tests) + smoke scripts   |
+| Tests      | Vitest + Supertest (39 integration/security tests) + smoke scripts   |
 
 ---
 
@@ -32,7 +32,7 @@ client/               React SPA (participant + admin)
   src/pages/          join, gameplay, results, terms
   src/admin/          dashboard, round control, live, teams, puzzles, QR, results, logs
   public/             favicon, icons, manifest
-server/               Express API + Socket.IO + SQLite
+server/               Express API + Socket.IO + Postgres
   src/routes/         participant + admin routes
   src/game.ts         rounds, leader selection, answers, final sequence, ranking
   src/seed.ts         8 teams, the exact Round 1 tokens, 32 default puzzles
@@ -63,7 +63,8 @@ NODE_ENV=production \
 PORT=4000 \
 ADMIN_USERNAME=admin \
 ADMIN_PASSWORD=REPLACE_WITH_A_LONG_RANDOM_PASSWORD \
-DATABASE_URL=./data/endgame.db \
+DATABASE_URL="$SUPABASE_POOLER_URL" \
+DIRECT_URL="$SUPABASE_DIRECT_URL" \
 PUBLIC_BASE_URL=https://your-domain.example \
 FRONTEND_URL=https://your-domain.example \
 npm start
@@ -77,7 +78,8 @@ The server serves the built SPA itself, so one origin (no CORS) is enough in pro
 | ------------------- | ------------------------------------------------------------------- |
 | `NODE_ENV`          | `production` enables secure cookies, strict startup checks          |
 | `PORT`              | API + static port (default `4000`)                                  |
-| `DATABASE_URL`      | SQLite file path, e.g. `./data/endgame.db`                          |
+| `DATABASE_URL`      | Supabase pooler URL (port 6543); `./data/pg` for local development   |
+| `DIRECT_URL`        | Optional Supabase session-mode URL (port 5432) used for migrations    |
 | `PUBLIC_BASE_URL`   | URL participants open after scanning (used to build join links)     |
 | `FRONTEND_URL`      | Allowed browser origin for CORS + Socket.IO                         |
 | `BACKEND_URL`       | Backend URL (informational)                                         |
@@ -94,9 +96,11 @@ If `ADMIN_PASSWORD` is empty in development, a one-time password is printed to t
 
 ## Database
 
-SQLite file created automatically on first boot (`server/data/endgame.db`). Tables:
+Schema is created automatically on first boot with idempotent migrations run against
+`DATABASE_URL` (using `DIRECT_URL` when set — Supabase recommends session mode for DDL). Tables:
 
-`admins`, `sessions`, `teams` (join token, correct sequence, roster), `participants`,
+`admins`, `sessions`, `teams` (join token, correct sequence, roster), `team_join_tokens`,
+`team_tokens`, `participants`,
 `puzzles`, `puzzle_attempts`, `final_submissions`, `rounds`, `team_results`, `audit_logs` —
 all with primary keys, foreign keys, unique constraints, CHECK constraints and indexes.
 
@@ -214,10 +218,10 @@ node scripts/security-check.mjs # 22 checks: rate limits, headers, CORS, sanitiz
 
 ## Deployment
 
-1. Provision a Node 20+ host with HTTPS (nginx/caddy), set `TRUST_PROXY=1`.
+1. Provision a Node 24+ host with HTTPS (nginx/caddy), set `TRUST_PROXY=1`.
 2. `npm ci && npm run build`.
 3. Set the environment variables above with `PUBLIC_BASE_URL` / `FRONTEND_URL` set to your domain.
-4. `npm start` (or run under pm2/systemd). Persist `DATABASE_URL` on a real path.
+4. `npm start` (or run under pm2/systemd). Set `DATABASE_URL`/`DIRECT_URL` to Supabase in the host environment.
 5. Before the event: open `/admin`, set `ADMIN_PASSWORD`, configure puzzles/sequences, print QRs.
 6. After the event: export results from the Results page; reset the round if you re-run it.
 
@@ -229,12 +233,14 @@ is created empty (teams, puzzles, admin only) on first boot.
 ## Deploying to Vercel + Render
 
 The repo ships with [`vercel.json`](vercel.json) (static frontend + `/api` and `/socket.io` proxied
-to the backend) and [`render.yaml`](render.yaml) (API blueprint with a persistent disk).
+to the backend) and [`render.yaml`](render.yaml) (API blueprint; the database lives on Supabase).
 
-1. **Render (API):** Dashboard → *New → Blueprint* → select this repo → choose the **Starter plan**
-   (a persistent disk is required or the SQLite database is wiped on redeploy/sleep). Copy the
-   generated `ADMIN_PASSWORD`, deploy, then confirm `https://<service>.onrender.com/api/health`
-   returns `{"ok":true}`.
+1. **Render (API + frontend):** Dashboard → *New → Blueprint* → select this repo. After the
+   service is created, open **Environment** and set `DATABASE_URL` (Supabase pooler, port 6543)
+   and `DIRECT_URL` (Supabase session mode, port 5432) — both are `sync: false` in the blueprint.
+   Copy the generated `ADMIN_PASSWORD`, redeploy, then confirm
+   `https://<service>.onrender.com/api/health` returns `{"ok":true}`. The Render URL alone serves
+   the whole game — QR codes derive from it automatically.
 2. **Vercel (frontend):** *New Project → Import repo*. Vercel picks up `vercel.json`
    (`npm run build -w client` → `client/dist`) and deploys.
 3. **Cross-link:** replace `YOUR-RENDER-SERVICE.onrender.com` in `vercel.json` with your real
@@ -250,5 +256,6 @@ Notes:
   refreshes every 15 s, so game correctness never depends on the socket.
 - Render services sleep when idle → the first scan after idle takes ~30 s; keep the instance on a
   plan that does not sleep during the event.
-- Single instance only — SQLite cannot be scaled horizontally.
+- Single instance — one process runs the round ticker and Socket.IO rooms; that is plenty for
+  32 players, and the database (Supabase) survives independently of the instance.
 - For bulletproof WebSockets, skip Vercel and serve the SPA from Render (single origin, no proxy).

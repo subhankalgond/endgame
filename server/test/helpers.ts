@@ -18,20 +18,20 @@ export async function boot(): Promise<Ctx> {
   const appModule = await import('../src/app');
   const dbModule = await import('../src/db');
   const seedModule = await import('../src/seed');
-  const app = appModule.createApp();
+  const app = await appModule.createApp();
   return { app, tokens: seedModule.TEAM_TOKENS, db: dbModule.db };
 }
 
 export type Agent = ReturnType<typeof request.agent>;
 
-export function joinToken(db: Ctx['db'], teamId: number): string {
-  const row = db.prepare('SELECT join_token FROM teams WHERE id = ?').get(teamId) as { join_token: string };
+export async function joinToken(db: Ctx['db'], teamId: number): Promise<string> {
+  const row = await db.prepare('SELECT join_token FROM teams WHERE id = ?').get(teamId) as { join_token: string };
   return row.join_token;
 }
 
 export async function join(ctx: Ctx, teamId: number, name: string): Promise<Agent> {
   const agent = request.agent(ctx.app);
-  const res = await agent.post(`/api/join/${joinToken(ctx.db, teamId)}`).send({ name });
+  const res = await agent.post(`/api/join/${await joinToken(ctx.db, teamId)}`).send({ name });
   if (res.status !== 201 && res.status !== 200) {
     throw new Error(`join failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
@@ -53,30 +53,30 @@ export async function fillTeam(ctx: Ctx, teamId: number, names: string[]): Promi
   return agents;
 }
 
-export function leaderIndex(db: Ctx['db'], teamId: number): number {
-  const row = db.prepare('SELECT slot FROM participants WHERE team_id = ? AND is_leader = 1').get(teamId) as
+export async function leaderIndex(db: Ctx['db'], teamId: number): Promise<number> {
+  const row = await db.prepare('SELECT slot FROM participants WHERE team_id = ? AND is_leader = 1').get(teamId) as
     | { slot: number }
     | undefined;
   if (!row) throw new Error('no leader selected');
   return row.slot - 1;
 }
 
-export function correctSequence(db: Ctx['db'], teamId: number): string[] {
-  const row = db.prepare('SELECT correct_sequence FROM teams WHERE id = ?').get(teamId) as {
+export async function correctSequence(db: Ctx['db'], teamId: number): Promise<string[]> {
+  const row = await db.prepare('SELECT correct_sequence FROM teams WHERE id = ?').get(teamId) as {
     correct_sequence: string;
   };
   return JSON.parse(row.correct_sequence) as string[];
 }
 
-export function puzzleAnswer(db: Ctx['db'], teamId: number, slot: number): string {
-  const row = db.prepare('SELECT answer FROM puzzles WHERE team_id = ? AND slot = ?').get(teamId, slot) as {
+export async function puzzleAnswer(db: Ctx['db'], teamId: number, slot: number): Promise<string> {
+  const row = await db.prepare('SELECT answer FROM puzzles WHERE team_id = ? AND slot = ?').get(teamId, slot) as {
     answer: string;
   };
   return row.answer;
 }
 
-export function rewardToken(db: Ctx['db'], teamId: number, slot: number): string {
-  const row = db.prepare('SELECT reward_token FROM puzzles WHERE team_id = ? AND slot = ?').get(teamId, slot) as {
+export async function rewardToken(db: Ctx['db'], teamId: number, slot: number): Promise<string> {
+  const row = await db.prepare('SELECT reward_token FROM puzzles WHERE team_id = ? AND slot = ?').get(teamId, slot) as {
     reward_token: string;
   };
   return row.reward_token;
@@ -91,7 +91,7 @@ export async function solveTeam(ctx: Ctx, agents: Agent[]): Promise<void> {
     const teamId = await teamIdOf(agents[i]);
     const res = await agents[i]
       .post('/api/puzzle/submit')
-      .send({ answer: puzzleAnswer(ctx.db, teamId, i + 1) });
+      .send({ answer: await puzzleAnswer(ctx.db, teamId, i + 1) });
     if (res.status !== 200 || !res.body.correct) {
       throw new Error(`solve failed for slot ${i + 1}: ${res.status} ${JSON.stringify(res.body)}`);
     }

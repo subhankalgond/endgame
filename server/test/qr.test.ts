@@ -30,7 +30,7 @@ describe('team QR codes', () => {
     const decoded = new Map<number, string>();
 
     for (let teamId = 1; teamId <= 8; teamId += 1) {
-      const url = `${publicBase}/join/team/${joinToken(ctx.db, teamId)}`;
+      const url = `${publicBase}/join/team/${await joinToken(ctx.db, teamId)}`;
       const png = await renderQr(url);
       expect(png.startsWith('data:image/png;base64,')).toBe(true);
       const text = decode(png);
@@ -43,7 +43,7 @@ describe('team QR codes', () => {
   });
 
   it('encodes only an opaque token - no team id, names or secrets', async () => {
-    const url = `${publicBase}/join/team/${joinToken(ctx.db, 1)}`;
+    const url = `${publicBase}/join/team/${await joinToken(ctx.db, 1)}`;
     const text = decode(await renderQr(url));
     expect(text).toMatch(/\/join\/team\/[A-Za-z0-9_-]{30,}$/);
     expect(text).not.toMatch(/team[_-]?1/i);
@@ -58,7 +58,7 @@ describe('team QR codes', () => {
     expect(res.body.items).toHaveLength(8);
     for (const item of res.body.items as { id: number; joinUrl: string; qr: string }[]) {
       expect(decode(item.qr)).toBe(item.joinUrl);
-      expect(item.joinUrl.endsWith(joinToken(ctx.db, item.id))).toBe(true);
+      expect(item.joinUrl.endsWith(await joinToken(ctx.db, item.id))).toBe(true);
     }
   });
 });

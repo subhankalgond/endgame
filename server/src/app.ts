@@ -6,6 +6,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { config } from './config';
+import { db } from './db';
 import { errorHandler, notFoundHandler } from './middleware';
 import { participantRouter } from './routes/participant';
 import { adminRouter } from './routes/admin';
@@ -13,8 +14,9 @@ import { seedDatabase } from './seed';
 import { startRateLimitSweeper } from './lib/rateLimit';
 import { requestOrigin } from './lib/origin';
 
-export function createApp(): express.Express {
-  seedDatabase();
+export async function createApp(): Promise<express.Express> {
+  await db.init();
+  await seedDatabase();
 
   const app = express();
   app.disable('x-powered-by');

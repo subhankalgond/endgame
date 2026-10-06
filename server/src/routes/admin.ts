@@ -50,9 +50,9 @@ const loginSchema = z.object({ username: z.string().min(1).max(64), password: z.
 
 adminRouter.post(
   '/login',
-  ah((req, res) => {
+  ah(async (req, res) => {
     const { username, password } = parseBody(loginSchema, req.body);
-    const admin = db.prepare('SELECT * FROM admins WHERE username = ?').get(username) as
+    const admin = await db.prepare('SELECT * FROM admins WHERE username = ?').get(username) as
       | { id: number; username: string; password_hash: string }
       | undefined;
     const valid = admin ? verifyPassword(password, admin.password_hash) : false;
@@ -61,8 +61,8 @@ adminRouter.post(
       throw httpError(401, 'Invalid credentials.', 'bad_credentials');
     }
     const prior = readSessionToken(req, 'admin');
-    if (prior) destroySession('admin', prior);
-    createSession(res, 'admin', { adminId: admin.id });
+    if (prior) await destroySession('admin', prior);
+    await createSession(res, 'admin', { adminId: admin.id });
     audit('admin_login', 'admin', { actorId: admin.id, detail: { username: admin.username } });
     res.json({ ok: true, username: admin.username });
   }),
@@ -70,8 +70,8 @@ adminRouter.post(
 
 adminRouter.post(
   '/logout',
-  ah((req, res) => {
-    destroySession('admin', readSessionToken(req, 'admin'));
+  ah(async (req, res) => {
+    await destroySession('admin', readSessionToken(req, 'admin'));
     res.json({ ok: true });
   }),
 );
@@ -79,8 +79,8 @@ adminRouter.post(
 adminRouter.get(
   '/me',
   requireAdmin,
-  ah((req, res) => {
-    const admin = db.prepare('SELECT id, username FROM admins WHERE id = ?').get(req.adminId!) as
+  ah(async (req, res) => {
+    const admin = await db.prepare('SELECT id, username FROM admins WHERE id = ?').get(req.adminId!) as
       | { id: number; username: string }
       | undefined;
     if (!admin) throw httpError(401, 'Administrator authentication required.', 'unauthenticated');
@@ -99,8 +99,8 @@ const teamUpdateSchema = z.object({
 
 adminRouter.get(
   '/teams',
-  ah((req, res) => {
-    const teams = db.prepare('SELECT * FROM teams ORDER BY id').all() as {
+  ah(async (req, res) => {
+    const teams = await db.prepare('SELECT * FROM teams ORDER BY id').all() as {
       id: number;
       name: string;
       join_token: string;
@@ -108,8 +108,9 @@ adminRouter.get(
       roster: string | null;
     }[];
     res.json({
-      teams: teams.map((team) => {
-        const players = db
+      teams: await Promise.all(
+        teams.map(async (team) => {
+        const players = await db
           .prepare('SELECT slot, name, is_leader, solved_at FROM participants WHERE team_id = ? ORDER BY slot')
           .all(team.id) as { slot: number; name: string; is_leader: number; solved_at: number | null }[];
         return {
@@ -126,7 +127,8 @@ adminRouter.get(
             solved: p.solved_at != null,
           })),
         };
-      }),
+        }),
+      ),
     });
   }),
 );
@@ -154,41 +156,41 @@ function joinUrl(req: Request, token: string): string {
 
 adminRouter.put(
   '/teams/:id',
-  ah((req, res) => {
+  ah(async (req, res) => {
     const teamId = Number(req.params.id);
     if (!Number.isInteger(teamId) || teamId < 1 || teamId > 8) throw httpError(400, 'Invalid team.', 'invalid_team');
     const body = parseBody(teamUpdateSchema, req.body);
-    const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId) as { id: number; name: string } | undefined;
+    const team = await db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId) as { id: number; name: string } | undefined;
     if (!team) throw httpError(404, 'Team not found.', 'not_found');
 
     if (body.name) {
       try {
-        db.prepare('UPDATE teams SET name = ?, updated_at = ? WHERE id = ?').run(body.name, nowMs(), teamId);
+        await db.prepare('UPDATE teams SET name = ?, updated_at = ? WHERE id = ?').run(body.name, nowMs(), teamId);
       } catch {
         throw httpError(409, 'That team name is already in use.', 'duplicate_name');
       }
     }
 
     if (body.roster) {
-      db.prepare('UPDATE teams SET roster = ?, updated_at = ? WHERE id = ?').run(
+      await db.prepare('UPDATE teams SET roster = ?, updated_at = ? WHERE id = ?').run(
         JSON.stringify(body.roster.map((n) => n.trim())),
         nowMs(),
         teamId,
       );
-      const joined = db.prepare('SELECT slot, name FROM participants WHERE team_id = ?').all(teamId) as {
+      const joined = await db.prepare('SELECT slot, name FROM participants WHERE team_id = ?').all(teamId) as {
         slot: number;
         name: string;
       }[];
       for (const player of joined) {
         const desired = body.roster[player.slot - 1]?.trim();
         if (desired && desired.toLowerCase() !== player.name.toLowerCase()) {
-          const taken = db
-            .prepare('SELECT id FROM participants WHERE team_id = ? AND slot != ? AND name = ? COLLATE NOCASE')
+          const taken = await db
+            .prepare('SELECT id FROM participants WHERE team_id = ? AND slot != ? AND LOWER(name) = LOWER(?)')
             .get(teamId, player.slot, desired);
           if (taken) throw httpError(409, 'A player with that name is already on this team.', 'duplicate_name');
-          db.prepare('UPDATE participants SET name = ? WHERE id = ?').run(
+          await db.prepare('UPDATE participants SET name = ? WHERE id = ?').run(
             desired,
-            (db.prepare('SELECT id FROM participants WHERE team_id = ? AND slot = ?').get(teamId, player.slot) as {
+            (await db.prepare('SELECT id FROM participants WHERE team_id = ? AND slot = ?').get(teamId, player.slot) as {
               id: string;
             }).id,
           );
@@ -206,7 +208,7 @@ adminRouter.put(
 adminRouter.get(
   '/qr',
   ah(async (req, res) => {
-    const teams = db.prepare('SELECT id, name, join_token FROM teams ORDER BY id').all() as {
+    const teams = await db.prepare('SELECT id, name, join_token FROM teams ORDER BY id').all() as {
       id: number;
       name: string;
       join_token: string;
@@ -227,11 +229,11 @@ const regenerateSchema = z.object({ teamId: z.number().int().min(1).max(8) });
 
 adminRouter.post(
   '/qr/regenerate',
-  ah((req, res) => {
+  ah(async (req, res) => {
     const { teamId } = parseBody(regenerateSchema, req.body);
     const token = newJoinToken();
-    db.prepare('UPDATE teams SET join_token = ?, updated_at = ? WHERE id = ?').run(token, nowMs(), teamId);
-    recordJoinToken(teamId, token);
+    await db.prepare('UPDATE teams SET join_token = ?, updated_at = ? WHERE id = ?').run(token, nowMs(), teamId);
+    await recordJoinToken(teamId, token);
     audit('qr_regenerated', 'admin', { actorId: req.adminId, teamId, detail: { invalidated: 'previous token' } });
     res.json({ teamId, joinUrl: joinUrl(req, token) });
   }),
@@ -250,8 +252,8 @@ const puzzleUpdateSchema = z.object({
 
 adminRouter.get(
   '/puzzles',
-  ah((_req, res) => {
-    const rows = db
+  ah(async (_req, res) => {
+    const rows = await db
       .prepare(
         `SELECT p.*, t.name AS team_name FROM puzzles p JOIN teams t ON t.id = p.team_id ORDER BY p.team_id, p.slot`,
       )
@@ -286,15 +288,15 @@ adminRouter.get(
 
 adminRouter.put(
   '/puzzles/:id',
-  ah((req, res) => {
+  ah(async (req, res) => {
     const puzzleId = Number(req.params.id);
     if (!Number.isInteger(puzzleId) || puzzleId < 1) throw httpError(400, 'Invalid puzzle.', 'invalid_puzzle');
     const body = parseBody(puzzleUpdateSchema, req.body);
-    const existing = db.prepare('SELECT * FROM puzzles WHERE id = ?').get(puzzleId) as
+    const existing = await db.prepare('SELECT * FROM puzzles WHERE id = ?').get(puzzleId) as
       | { id: number; team_id: number; slot: number }
       | undefined;
     if (!existing) throw httpError(404, 'Puzzle not found.', 'not_found');
-    db.prepare(
+    await db.prepare(
       `UPDATE puzzles SET question = ?, answer = ?, alt_answers = ?, reward_token = ?, difficulty = ?, explanation = ?, updated_at = ? WHERE id = ?`,
     ).run(
       body.question.trim(),
@@ -306,7 +308,7 @@ adminRouter.put(
       nowMs(),
       puzzleId,
     );
-    syncTeamToken(existing.team_id, existing.slot, body.rewardToken.trim());
+    await syncTeamToken(existing.team_id, existing.slot, body.rewardToken.trim());
     audit('puzzle_updated', 'admin', { actorId: req.adminId, detail: { puzzleId } });
     res.json({ ok: true });
   }),
@@ -316,12 +318,12 @@ const sequenceSchema = z.object({ sequence: z.array(z.string().min(1).max(16)).l
 
 adminRouter.put(
   '/teams/:id/sequence',
-  ah((req, res) => {
+  ah(async (req, res) => {
     const teamId = Number(req.params.id);
     if (!Number.isInteger(teamId) || teamId < 1 || teamId > 8) throw httpError(400, 'Invalid team.', 'invalid_team');
     const { sequence } = parseBody(sequenceSchema, req.body);
     const tokens = (
-      db.prepare('SELECT reward_token FROM puzzles WHERE team_id = ? ORDER BY slot').all(teamId) as {
+      await db.prepare('SELECT reward_token FROM puzzles WHERE team_id = ? ORDER BY slot').all(teamId) as {
         reward_token: string;
       }[]
     ).map((row) => row.reward_token);
@@ -329,7 +331,7 @@ adminRouter.put(
     if (unique.size !== 4 || sequence.some((t) => !tokens.includes(t))) {
       throw httpError(400, 'Sequence must be the team’s four reward tokens in some order.', 'invalid_sequence');
     }
-    db.prepare('UPDATE teams SET correct_sequence = ?, updated_at = ? WHERE id = ?').run(
+    await db.prepare('UPDATE teams SET correct_sequence = ?, updated_at = ? WHERE id = ?').run(
       JSON.stringify(sequence),
       nowMs(),
       teamId,
@@ -343,13 +345,14 @@ adminRouter.put(
 
 adminRouter.get(
   '/round',
-  ah((_req, res) => {
-    const round = refreshRound();
-    const readyTeams = liveStatus().readyTeams;
+  ah(async (_req, res) => {
+    const round = await refreshRound();
+    const status = await liveStatus();
+    const readyTeams = status.readyTeams;
     res.json({
       round: roundView(round),
       readyTeams,
-      participants: liveStatus().participants,
+      participants: status.participants,
       expected: { participants: 32, teams: 8 },
     });
   }),
@@ -357,22 +360,22 @@ adminRouter.get(
 
 adminRouter.post(
   '/round/prepare',
-  ah((req, res) => {
-    res.json({ round: roundView(prepareRound(req.adminId!)) });
+  ah(async (req, res) => {
+    res.json({ round: roundView(await prepareRound(req.adminId!)) });
   }),
 );
 
 adminRouter.post(
   '/round/start',
-  ah((req, res) => {
-    res.json({ round: roundView(startRound(req.adminId!)) });
+  ah(async (req, res) => {
+    res.json({ round: roundView(await startRound(req.adminId!)) });
   }),
 );
 
 adminRouter.post(
   '/round/end',
-  ah((req, res) => {
-    res.json({ round: roundView(endRound('admin', req.adminId!)), results: getResults() });
+  ah(async (req, res) => {
+    res.json({ round: roundView(await endRound('admin', req.adminId!)), results: await getResults() });
   }),
 );
 
@@ -380,9 +383,9 @@ const resetSchema = z.object({ confirm: z.literal(true) });
 
 adminRouter.post(
   '/round/reset',
-  ah((req, res) => {
+  ah(async (req, res) => {
     parseBody(resetSchema, req.body);
-    res.json({ round: roundView(resetRound(req.adminId!)) });
+    res.json({ round: roundView(await resetRound(req.adminId!)) });
   }),
 );
 
@@ -390,23 +393,23 @@ adminRouter.post(
 
 adminRouter.get(
   '/live-status',
-  ah((_req, res) => {
-    res.json(liveStatus());
+  ah(async (_req, res) => {
+    res.json(await liveStatus());
   }),
 );
 
 adminRouter.get(
   '/results',
-  ah((_req, res) => {
-    refreshRound();
-    res.json({ round: roundView(getRound()), results: getResults() });
+  ah(async (_req, res) => {
+    await refreshRound();
+    res.json({ round: roundView(await getRound()), results: await getResults() });
   }),
 );
 
 adminRouter.get(
   '/submissions',
-  ah((_req, res) => {
-    const rows = db
+  ah(async (_req, res) => {
+    const rows = await db
       .prepare(
         `SELECT f.*, t.name AS team_name, p.name AS leader_name
          FROM final_submissions f
@@ -445,8 +448,8 @@ adminRouter.get(
 
 adminRouter.get(
   '/attempts',
-  ah((_req, res) => {
-    const rows = db
+  ah(async (_req, res) => {
+    const rows = await db
       .prepare(
         `SELECT a.*, p.name AS participant_name, p.slot, t.name AS team_name
          FROM puzzle_attempts a
@@ -478,8 +481,8 @@ adminRouter.get(
 
 adminRouter.get(
   '/logs',
-  ah((_req, res) => {
-    const rows = db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 300').all() as {
+  ah(async (_req, res) => {
+    const rows = await db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 300').all() as {
       id: number;
       event: string;
       actor_type: string;
@@ -504,8 +507,8 @@ adminRouter.get(
 
 adminRouter.post(
   '/rankings/recompute',
-  ah((_req, res) => {
-    computeRankings();
-    res.json({ results: getResults() });
+  ah(async (_req, res) => {
+    await computeRankings();
+    res.json({ results: await getResults() });
   }),
 );

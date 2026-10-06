@@ -24,7 +24,7 @@ beforeAll(async () => {
 
 describe('team QR joining', () => {
   it('uses 8 unique join tokens that map to the correct team', async () => {
-    const rows = ctx.db.prepare('SELECT id, join_token FROM teams ORDER BY id').all() as {
+    const rows = await ctx.db.prepare('SELECT id, join_token FROM teams ORDER BY id').all() as {
       id: number;
       join_token: string;
     }[];
@@ -37,7 +37,7 @@ describe('team QR joining', () => {
       expect(res.status).toBe(201);
       expect(res.body.team.id).toBe(row.id);
       // clean up the probe participant so the full-flow tests start fresh
-      ctx.db.prepare('DELETE FROM participants WHERE name = ?').run(`Probe${row.id}`);
+      await ctx.db.prepare('DELETE FROM participants WHERE name = ?').run(`Probe${row.id}`);
     }
   });
 
@@ -50,7 +50,7 @@ describe('team QR joining', () => {
   });
 
   it('rejects invalid names', async () => {
-    const token = joinToken(ctx.db, 8);
+    const token = await joinToken(ctx.db, 8);
     const empty = await request(ctx.app).post(`/api/join/${token}`).send({ name: 'x' });
     expect(empty.status).toBe(400);
     const chars = await request(ctx.app).post(`/api/join/${token}`).send({ name: '<script>alert(1)</script>' });
@@ -63,11 +63,11 @@ describe('team QR joining', () => {
     const extra = await join(ctx, 8, 'Ghost').catch(() => null);
     expect(extra).toBeNull();
     // re-scanning with an existing name reattaches instead of creating a 5th player
-    const duplicate = await request(ctx.app).post(`/api/join/${joinToken(ctx.db, 8)}`).send({ name: 'riya' });
+    const duplicate = await request(ctx.app).post(`/api/join/${await joinToken(ctx.db, 8)}`).send({ name: 'riya' });
     expect(duplicate.status).toBe(200);
-    const count = ctx.db.prepare('SELECT COUNT(*) AS c FROM participants WHERE team_id = 8').get() as { c: number };
+    const count = await ctx.db.prepare('SELECT COUNT(*) AS c FROM participants WHERE team_id = 8').get() as { c: number };
     expect(count.c).toBe(4);
-    const slots = ctx.db
+    const slots = await ctx.db
       .prepare('SELECT DISTINCT slot FROM participants WHERE team_id = 8')
       .all() as { slot: number }[];
     expect(slots).toHaveLength(4);
@@ -86,12 +86,12 @@ describe('round flow', () => {
     expect(status.status).toBe(200);
     expect(status.body.players).toHaveLength(4);
     expect(status.body.players.every((p: { joined: boolean }) => p.joined)).toBe(true);
-    const round = ctx.db.prepare('SELECT state FROM rounds WHERE id = 1').get() as { state: string };
+    const round = await ctx.db.prepare('SELECT state FROM rounds WHERE id = 1').get() as { state: string };
     expect(['WAITING', 'READY']).toContain(round.state);
   });
 
   it('selects exactly one leader automatically', async () => {
-    const leaders = ctx.db
+    const leaders = await ctx.db
       .prepare('SELECT id, slot FROM participants WHERE team_id = 1 AND is_leader = 1')
       .all() as { id: string; slot: number }[];
     expect(leaders).toHaveLength(1);
@@ -103,7 +103,7 @@ describe('round flow', () => {
       const res2 = await agent.put('/api/session').send({ isLeader: true });
       expect(res2.status).toBe(404);
     }
-    const stillOne = ctx.db
+    const stillOne = await ctx.db
       .prepare('SELECT COUNT(*) AS c FROM participants WHERE team_id = 1 AND is_leader = 1')
       .get() as { c: number };
     expect(stillOne.c).toBe(1);
@@ -139,15 +139,15 @@ describe('round flow', () => {
     const wrong = await agents[1].post('/api/puzzle/submit').send({ answer: 'definitely-wrong' });
     expect(wrong.status).toBe(200);
     expect(wrong.body.correct).toBe(false);
-    expect(JSON.stringify(wrong.body)).not.toContain(rewardToken(ctx.db, 1, 2));
+    expect(JSON.stringify(wrong.body)).not.toContain(await rewardToken(ctx.db, 1, 2));
 
     const correct = await agents[1]
       .post('/api/puzzle/submit')
-      .send({ answer: `  ${puzzleAnswer(ctx.db, 1, 2).toUpperCase()}  ` });
+      .send({ answer: `  ${(await puzzleAnswer(ctx.db, 1, 2)).toUpperCase()}  ` });
     expect(correct.body.correct).toBe(true);
-    expect(correct.body.token).toBe(rewardToken(ctx.db, 1, 2));
+    expect(correct.body.token).toBe(await rewardToken(ctx.db, 1, 2));
 
-    const attempt = ctx.db
+    const attempt = await ctx.db
       .prepare('SELECT COUNT(*) AS c FROM puzzle_attempts WHERE team_id = 1')
       .get() as { c: number };
     expect(attempt.c).toBe(2);
@@ -161,10 +161,10 @@ describe('round flow', () => {
     const res = await agents[2].post('/api/puzzle/submit').send({ answer: '10', puzzleId: 1, slot: 1 });
     expect([200, 400]).toContain(res.status);
     if (res.status === 200) expect(res.body.correct).toBe(false);
-    const participant = ctx.db.prepare('SELECT puzzle_id FROM participants WHERE team_id = 1 AND slot = 3').get() as {
+    const participant = await ctx.db.prepare('SELECT puzzle_id FROM participants WHERE team_id = 1 AND slot = 3').get() as {
       puzzle_id: number;
     };
-    const puzzle = ctx.db.prepare('SELECT team_id, slot FROM puzzles WHERE id = ?').get(participant.puzzle_id) as {
+    const puzzle = await ctx.db.prepare('SELECT team_id, slot FROM puzzles WHERE id = ?').get(participant.puzzle_id) as {
       team_id: number;
       slot: number;
     };
@@ -174,8 +174,8 @@ describe('round flow', () => {
 
   it('only allows the leader to submit the final sequence', async () => {
     await solveTeam(ctx, agents);
-    const leaderIdx = leaderIndex(ctx.db, 1);
-    const seq = correctSequence(ctx.db, 1);
+    const leaderIdx = await leaderIndex(ctx.db, 1);
+    const seq = await correctSequence(ctx.db, 1);
 
     const nonLeaderIdx = (leaderIdx + 1) % 4;
     const forbidden = await agents[nonLeaderIdx].post('/api/team/final-submit').send({ sequence: seq });
@@ -200,9 +200,9 @@ describe('round flow', () => {
   });
 
   it('keeps the server timer unchanged across retries', async () => {
-    const leader = agents[leaderIndex(ctx.db, 1)];
+    const leader = agents[await leaderIndex(ctx.db, 1)];
     const before = await leader.get('/api/round/status');
-    const seq = correctSequence(ctx.db, 1);
+    const seq = await correctSequence(ctx.db, 1);
     const rotated = [seq[1], seq[2], seq[3], seq[0]];
     const res = await leader.post('/api/team/final-submit').send({ sequence: rotated, endsAt: 9999999999999 });
     expect(res.status).toBe(200);
@@ -210,13 +210,13 @@ describe('round flow', () => {
     const after = await leader.get('/api/round/status');
     expect(after.body.endsAt).toBe(before.body.endsAt);
     expect(after.body.startedAt).toBe(before.body.startedAt);
-    const subs = ctx.db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = 1').get() as { c: number };
+    const subs = await ctx.db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = 1').get() as { c: number };
     expect(subs.c).toBe(2);
   });
 
   it('deduplicates a rapid double tap of the same sequence', async () => {
-    const leader = agents[leaderIndex(ctx.db, 1)];
-    const seq = correctSequence(ctx.db, 1);
+    const leader = agents[await leaderIndex(ctx.db, 1)];
+    const seq = await correctSequence(ctx.db, 1);
     const [a, b] = await Promise.all([
       leader.post('/api/team/final-submit').send({ sequence: seq }),
       leader.post('/api/team/final-submit').send({ sequence: seq }),
@@ -224,9 +224,9 @@ describe('round flow', () => {
     expect(a.status).toBe(200);
     expect(b.status).toBe(200);
     expect(a.body.completed).toBe(true);
-    const subs = ctx.db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = 1').get() as { c: number };
+    const subs = await ctx.db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = 1').get() as { c: number };
     expect(subs.c).toBe(3);
-    const result = ctx.db.prepare('SELECT completion_time_ms FROM team_results WHERE team_id = 1').get() as {
+    const result = await ctx.db.prepare('SELECT completion_time_ms FROM team_results WHERE team_id = 1').get() as {
       completion_time_ms: number | null;
     };
     expect(result.completion_time_ms).not.toBeNull();
@@ -246,12 +246,12 @@ describe('round flow', () => {
     expect(id).toBe(4);
     const again = await agents[3].get('/api/session');
     expect(again.body.participant.name).toBe('Sara');
-    const total = ctx.db.prepare('SELECT COUNT(*) AS c FROM participants WHERE team_id = 1').get() as { c: number };
+    const total = await ctx.db.prepare('SELECT COUNT(*) AS c FROM participants WHERE team_id = 1').get() as { c: number };
     expect(total.c).toBe(4);
   });
 
   it('never exposes the correct final sequence to a participant', async () => {
-    const seq = correctSequence(ctx.db, 1);
+    const seq = await correctSequence(ctx.db, 1);
     for (const agent of agents) {
       const res = await agent.get('/api/session');
       const body = JSON.stringify(res.body);
@@ -272,7 +272,7 @@ describe('round flow', () => {
   it('keeps participants scoped to their own team', async () => {
     const res = await agents[0].get('/api/team/status');
     expect(res.body.team.id).toBe(1);
-    const otherTeam = ctx.db.prepare('SELECT correct_sequence FROM teams WHERE id = 2').get() as {
+    const otherTeam = await ctx.db.prepare('SELECT correct_sequence FROM teams WHERE id = 2').get() as {
       correct_sequence: string;
     };
     expect(JSON.stringify(res.body)).not.toContain(otherTeam.correct_sequence);
@@ -284,20 +284,20 @@ describe('time expiry', () => {
     const agents = await fillTeam(ctx, 2, ['T2 P1', 'T2 P2', 'T2 P3', 'T2 P4']);
     await solveTeam(ctx, agents);
     // simulate the server clock passing the end time
-    ctx.db.prepare('UPDATE rounds SET ends_at = ? WHERE id = 1').run(Date.now() - 1000);
+    await ctx.db.prepare('UPDATE rounds SET ends_at = ? WHERE id = 1').run(Date.now() - 1000);
 
-    const leader = agents[leaderIndex(ctx.db, 2)];
+    const leader = agents[await leaderIndex(ctx.db, 2)];
     const puzzle = await agents[0].post('/api/puzzle/submit').send({ answer: 'anything' });
     expect(puzzle.status).toBe(410);
 
-    const final = await leader.post('/api/team/final-submit').send({ sequence: correctSequence(ctx.db, 2) });
+    const final = await leader.post('/api/team/final-submit').send({ sequence: await correctSequence(ctx.db, 2) });
     expect(final.status).toBe(410);
 
-    const round = ctx.db.prepare('SELECT state FROM rounds WHERE id = 1').get() as { state: string };
+    const round = await ctx.db.prepare('SELECT state FROM rounds WHERE id = 1').get() as { state: string };
     expect(round.state).toBe('ENDED');
   });
 });
 
 export async function teamOf(agent: Agent): Promise<number> {
-  return teamIdOf(agent);
+  return await teamIdOf(agent);
 }

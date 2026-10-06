@@ -16,19 +16,23 @@ declare global {
 }
 
 /** Resolve the participant session (if any) without failing the request. */
-export function attachParticipant(req: Request, _res: Response, next: NextFunction): void {
-  const token = readSessionToken(req, 'participant');
-  const session = lookupSession('participant', token);
+export async function attachParticipant(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  try {
+    const token = readSessionToken(req, 'participant');
+    const session = await lookupSession('participant', token);
   if (session?.participant_id) {
-    const row = db.prepare('SELECT * FROM participants WHERE id = ?').get(session.participant_id) as
+    const row = await db.prepare('SELECT * FROM participants WHERE id = ?').get(session.participant_id) as
       | ParticipantRow
       | undefined;
     if (row) {
       req.participant = row;
-      db.prepare('UPDATE participants SET last_seen_at = ? WHERE id = ?').run(Date.now(), row.id);
+      await db.prepare('UPDATE participants SET last_seen_at = ? WHERE id = ?').run(Date.now(), row.id);
     }
   }
   next();
+  } catch (err) {
+    next(err as Error);
+  }
 }
 
 /** Reject the request unless a valid participant session exists. */
@@ -41,15 +45,19 @@ export function requireParticipant(req: Request, _res: Response, next: NextFunct
 }
 
 /** Reject the request unless a valid administrator session exists. */
-export function requireAdmin(req: Request, _res: Response, next: NextFunction): void {
-  const token = readSessionToken(req, 'admin');
-  const session = lookupSession('admin', token);
+export async function requireAdmin(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  try {
+    const token = readSessionToken(req, 'admin');
+    const session = await lookupSession('admin', token);
   if (!session || !session.admin_id) {
     next(httpError(401, 'Administrator authentication required.', 'unauthenticated'));
     return;
   }
   req.adminId = session.admin_id;
   next();
+  } catch (err) {
+    next(err as Error);
+  }
 }
 
 /** Validate request bodies with zod; failures become safe 400 responses. */

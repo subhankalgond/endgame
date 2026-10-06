@@ -34,12 +34,12 @@ export function createSocketServer(httpServer: HttpServer): Server {
     maxHttpBufferSize: 8_000,
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const cookies = parseCookies(socket.handshake.headers.cookie);
 
     const adminToken = cookies.eg_admin;
     if (adminToken) {
-      const session = lookupSession('admin', adminToken);
+      const session = await lookupSession('admin', adminToken);
       if (session?.admin_id) {
         socket.data.role = 'admin';
         socket.data.adminId = session.admin_id;
@@ -50,9 +50,9 @@ export function createSocketServer(httpServer: HttpServer): Server {
 
     const participantToken = cookies.eg_session;
     if (participantToken) {
-      const session = lookupSession('participant', participantToken);
+      const session = await lookupSession('participant', participantToken);
       if (session?.participant_id) {
-        const participant = db
+        const participant = await db
           .prepare('SELECT id, team_id FROM participants WHERE id = ?')
           .get(session.participant_id) as { id: string; team_id: number } | undefined;
         if (participant) {

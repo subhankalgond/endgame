@@ -66,37 +66,37 @@ export interface ResultRow {
 
 /* ------------------------------------------------------------------ rounds */
 
-export function getRound(): RoundRow {
-  let row = db.prepare('SELECT * FROM rounds WHERE id = 1').get() as unknown as RoundRow | undefined;
+export async function getRound(): Promise<RoundRow> {
+  let row = await db.prepare('SELECT * FROM rounds WHERE id = 1').get() as unknown as RoundRow | undefined;
   if (!row) {
-    db.prepare('INSERT INTO rounds (id, state, duration_sec, updated_at) VALUES (1, ?, ?, ?)').run(
+    await db.prepare('INSERT INTO rounds (id, state, duration_sec, updated_at) VALUES (1, ?, ?, ?)').run(
       'WAITING',
       600,
       nowMs(),
     );
-    row = db.prepare('SELECT * FROM rounds WHERE id = 1').get() as unknown as RoundRow;
+    row = await db.prepare('SELECT * FROM rounds WHERE id = 1').get() as unknown as RoundRow;
   }
   return row;
 }
 
-export function prepareRound(actorId: number): RoundRow {
-  const round = getRound();
+export async function prepareRound(actorId: number): Promise<RoundRow> {
+  const round = await getRound();
   if (round.state === 'ACTIVE') throw httpError(409, 'Round is already active.', 'active');
   if (round.state === 'ENDED') throw httpError(409, 'Round has ended. Reset the round before preparing it again.', 'ended');
-  db.prepare("UPDATE rounds SET state = 'READY', updated_at = ? WHERE id = 1").run(nowMs());
+  await db.prepare("UPDATE rounds SET state = 'READY', updated_at = ? WHERE id = 1").run(nowMs());
   audit('round_prepared', 'admin', { actorId, detail: { from: round.state } });
   emitToAll('round_state', { state: 'READY' });
   broadcastLive();
-  return getRound();
+  return await getRound();
 }
 
-export function startRound(actorId: number): RoundRow {
-  const round = getRound();
+export async function startRound(actorId: number): Promise<RoundRow> {
+  const round = await getRound();
   if (round.state === 'ACTIVE') throw httpError(409, 'Round is already active.', 'active');
   if (round.state === 'ENDED') throw httpError(409, 'Round has ended. Reset the round before starting it again.', 'ended');
   const now = nowMs();
   const endsAt = now + round.duration_sec * 1000;
-  db.prepare("UPDATE rounds SET state = 'ACTIVE', started_at = ?, ends_at = ?, ended_at = NULL, updated_at = ? WHERE id = 1").run(
+  await db.prepare("UPDATE rounds SET state = 'ACTIVE', started_at = ?, ends_at = ?, ended_at = NULL, updated_at = ? WHERE id = 1").run(
     now,
     endsAt,
     now,
@@ -104,15 +104,15 @@ export function startRound(actorId: number): RoundRow {
   audit('round_started', 'admin', { actorId, detail: { startedAt: now, endsAt, durationSec: round.duration_sec } });
   emitToAll('round_started', { startedAt: now, endsAt, durationSec: round.duration_sec, serverTime: now });
   broadcastLive();
-  return getRound();
+  return await getRound();
 }
 
-export function computeRankings(): void {
-  const teams = db.prepare('SELECT id, name FROM teams ORDER BY id').all() as { id: number; name: string }[];
+export async function computeRankings(): Promise<void> {
+  const teams = await db.prepare('SELECT id, name FROM teams ORDER BY id').all() as { id: number; name: string }[];
   const now = nowMs();
 
-  const agg = teams.map((team) => {
-    const result = (db.prepare('SELECT * FROM team_results WHERE team_id = ?').get(team.id) as ResultRow | undefined) ?? {
+  const agg = await Promise.all(teams.map(async (team) => {
+    const result = (await db.prepare('SELECT * FROM team_results WHERE team_id = ?').get(team.id) as ResultRow | undefined) ?? {
       team_id: team.id,
       completed_at: null,
       completion_time_ms: null,
@@ -121,19 +121,19 @@ export function computeRankings(): void {
       updated_at: now,
     };
     const solved = (
-      db.prepare('SELECT COUNT(*) AS c FROM participants WHERE team_id = ? AND solved_at IS NOT NULL').get(team.id) as { c: number }
+      await db.prepare('SELECT COUNT(*) AS c FROM participants WHERE team_id = ? AND solved_at IS NOT NULL').get(team.id) as { c: number }
     ).c;
     const wrongPuzzles = (
-      db.prepare('SELECT COUNT(*) AS c FROM puzzle_attempts WHERE team_id = ? AND correct = 0').get(team.id) as { c: number }
+      await db.prepare('SELECT COUNT(*) AS c FROM puzzle_attempts WHERE team_id = ? AND correct = 0').get(team.id) as { c: number }
     ).c;
     const wrongFinals = (
-      db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = ? AND was_correct = 0').get(team.id) as { c: number }
+      await db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = ? AND was_correct = 0').get(team.id) as { c: number }
     ).c;
     const lastActivity =
       (
-        db.prepare('SELECT MAX(created_at) AS m FROM puzzle_attempts WHERE team_id = ?').get(team.id) as { m: number | null }
+        await db.prepare('SELECT MAX(created_at) AS m FROM puzzle_attempts WHERE team_id = ?').get(team.id) as { m: number | null }
       ).m ??
-      (db.prepare('SELECT MAX(joined_at) AS m FROM participants WHERE team_id = ?').get(team.id) as { m: number | null }).m ??
+      (await db.prepare('SELECT MAX(joined_at) AS m FROM participants WHERE team_id = ?').get(team.id) as { m: number | null }).m ??
       now;
     return {
       teamId: team.id,
@@ -145,7 +145,7 @@ export function computeRankings(): void {
       wrongFinals,
       lastActivity,
     };
-  });
+  }));
 
   agg.sort((a, b) => {
     const aDone = a.completionTimeMs != null;
@@ -163,7 +163,7 @@ export function computeRankings(): void {
     return a.lastActivity - b.lastActivity;
   });
 
-  const update = db.prepare(
+  const update = await db.prepare(
     'UPDATE team_results SET rank = ?, status = ?, updated_at = ? WHERE team_id = ?',
   );
   agg.forEach((row, index) => {
@@ -173,12 +173,12 @@ export function computeRankings(): void {
   });
 }
 
-export function endRound(reason: 'admin' | 'expired', actorId?: number): RoundRow {
-  const round = getRound();
+export async function endRound(reason: 'admin' | 'expired', actorId?: number): Promise<RoundRow> {
+  const round = await getRound();
   if (round.state === 'ENDED') return round;
   const now = nowMs();
-  db.prepare("UPDATE rounds SET state = 'ENDED', ended_at = ?, updated_at = ? WHERE id = 1").run(now, now);
-  computeRankings();
+  await db.prepare("UPDATE rounds SET state = 'ENDED', ended_at = ?, updated_at = ? WHERE id = 1").run(now, now);
+  await computeRankings();
   audit(reason === 'expired' ? 'round_time_expired' : 'round_ended', reason === 'expired' ? 'system' : 'admin', {
     actorId: actorId ?? null,
     detail: { reason, endedAt: now },
@@ -186,90 +186,85 @@ export function endRound(reason: 'admin' | 'expired', actorId?: number): RoundRo
   emitToAll('round_ended', { reason, serverTime: now });
   emitToAdmins('results_updated', { at: now });
   broadcastLive();
-  return getRound();
+  return await getRound();
 }
 
 /** Auto-finish the round when the server clock passes roundEndsAt. */
-export function refreshRound(): RoundRow {
-  const round = getRound();
+export async function refreshRound(): Promise<RoundRow> {
+  const round = await getRound();
   if (round.state === 'ACTIVE' && round.ends_at && nowMs() >= round.ends_at) {
-    return endRound('expired');
+    return await endRound('expired');
   }
   return round;
 }
 
-export function resetRound(actorId: number): RoundRow {
+export async function resetRound(actorId: number): Promise<RoundRow> {
   const now = nowMs();
-  db.exec('BEGIN');
-  try {
-    db.prepare('DELETE FROM sessions WHERE role = ?').run('participant');
-    db.prepare('DELETE FROM puzzle_attempts').run();
-    db.prepare('DELETE FROM final_submissions').run();
-    db.prepare('DELETE FROM participants').run();
-    db.prepare('UPDATE team_results SET completed_at = NULL, completion_time_ms = NULL, status = ?, rank = NULL, updated_at = ?').run(
+  await db.tx(async () => {
+    await db.prepare('DELETE FROM sessions WHERE role = ?').run('participant');
+    await db.prepare('DELETE FROM puzzle_attempts').run();
+    await db.prepare('DELETE FROM final_submissions').run();
+    await db.prepare('DELETE FROM participants').run();
+    await db.prepare('UPDATE team_results SET completed_at = NULL, completion_time_ms = NULL, status = ?, rank = NULL, updated_at = ?').run(
       'PENDING',
       now,
     );
-    db.prepare(
+    await db.prepare(
       "UPDATE rounds SET state = 'WAITING', started_at = NULL, ends_at = NULL, ended_at = NULL, updated_at = ? WHERE id = 1",
     ).run(now);
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+  });
   audit('admin_reset_round', 'admin', { actorId, detail: { at: now } });
   emitToAll('round_reset', { serverTime: now });
   broadcastLive();
-  return getRound();
+  return await getRound();
 }
 
 /* ------------------------------------------------------------------- teams */
 
-export function getTeam(teamId: number): TeamRow {
-  const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId) as TeamRow | undefined;
+export async function getTeam(teamId: number): Promise<TeamRow> {
+  const team = await db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId) as TeamRow | undefined;
   if (!team) throw httpError(404, 'Team not found.', 'not_found');
   return team;
 }
 
-export function getTeamByToken(token: string): TeamRow | null {
-  return (db.prepare('SELECT * FROM teams WHERE join_token = ?').get(token) as TeamRow | undefined) ?? null;
+export async function getTeamByToken(token: string): Promise<TeamRow | null> {
+  return (await db.prepare('SELECT * FROM teams WHERE join_token = ?').get(token) as TeamRow | undefined) ?? null;
 }
 
-export function getParticipants(teamId: number): ParticipantRow[] {
-  return db
+export async function getParticipants(teamId: number): Promise<ParticipantRow[]> {
+  return await db
     .prepare('SELECT * FROM participants WHERE team_id = ? ORDER BY slot')
     .all(teamId) as unknown as ParticipantRow[];
 }
 
-export function getPuzzleForSlot(teamId: number, slot: number): PuzzleRow {
-  const puzzle = db.prepare('SELECT * FROM puzzles WHERE team_id = ? AND slot = ?').get(teamId, slot) as
+export async function getPuzzleForSlot(teamId: number, slot: number): Promise<PuzzleRow> {
+  const puzzle = await db.prepare('SELECT * FROM puzzles WHERE team_id = ? AND slot = ?').get(teamId, slot) as
     | PuzzleRow
     | undefined;
   if (!puzzle) throw httpError(500, 'Unable to process the request.', 'puzzle_missing');
   return puzzle;
 }
 
-export function getPuzzleById(puzzleId: number): PuzzleRow | null {
-  return (db.prepare('SELECT * FROM puzzles WHERE id = ?').get(puzzleId) as PuzzleRow | undefined) ?? null;
+export async function getPuzzleById(puzzleId: number): Promise<PuzzleRow | null> {
+  return (await db.prepare('SELECT * FROM puzzles WHERE id = ?').get(puzzleId) as PuzzleRow | undefined) ?? null;
 }
 
-export function teamTokens(teamId: number): string[] {
-  const rows = db
+export async function teamTokens(teamId: number): Promise<string[]> {
+  const rows = await db
     .prepare('SELECT slot, reward_token FROM team_tokens WHERE team_id = ? ORDER BY slot')
     .all(teamId) as { slot: number; reward_token: string }[];
   if (rows.length === 4) return rows.map((row) => row.reward_token);
   // Self-healing path for databases created before the team_tokens table existed.
   return (
-    db.prepare('SELECT slot, reward_token FROM puzzles WHERE team_id = ? ORDER BY slot').all(teamId) as {
+    await db.prepare('SELECT slot, reward_token FROM puzzles WHERE team_id = ? ORDER BY slot').all(teamId) as {
       slot: number;
       reward_token: string;
     }[]
   ).map((row) => row.reward_token);
 }
 
-export function readCorrectSequence(teamId: number): string[] {
-  const team = getTeam(teamId);
+export async function readCorrectSequence(teamId: number): Promise<string[]> {
+  const team = await getTeam(teamId);
   try {
     const parsed = JSON.parse(team.correct_sequence) as unknown;
     if (Array.isArray(parsed) && parsed.length === 4 && parsed.every((t) => typeof t === 'string')) {
@@ -282,8 +277,8 @@ export function readCorrectSequence(teamId: number): string[] {
 }
 
 /** Called when the fourth participant joins: pick the leader and hand out puzzles. */
-export function armTeam(teamId: number): { leaderId: string } | null {
-  const players = getParticipants(teamId);
+export async function armTeam(teamId: number): Promise<{ leaderId: string } | null> {
+  const players = await getParticipants(teamId);
   if (players.length !== 4) return null;
   const alreadyArmed = players.some((p) => p.is_leader === 1);
   if (alreadyArmed) {
@@ -294,47 +289,45 @@ export function armTeam(teamId: number): { leaderId: string } | null {
   const leaderIndex = randomInt(0, players.length);
   const leader = players[leaderIndex];
   const now = nowMs();
-  db.exec('BEGIN');
-  try {
-    const setLeader = db.prepare('UPDATE participants SET is_leader = ?, puzzle_id = ?, last_seen_at = ? WHERE id = ?');
+  const armedLeaderId = await db.tx(async () => {
+    const setLeader = await db.prepare(
+      'UPDATE participants SET is_leader = ?, puzzle_id = ?, last_seen_at = ? WHERE id = ?',
+    );
     for (const player of players) {
-      const puzzle = getPuzzleForSlot(teamId, player.slot);
-      setLeader.run(player.id === leader.id ? 1 : 0, puzzle.id, now, player.id);
+      const puzzle = await getPuzzleForSlot(teamId, player.slot);
+      await setLeader.run(player.id === leader.id ? 1 : 0, puzzle.id, now, player.id);
     }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+    return leader.id;
+  });
   audit('leader_selected', 'system', { teamId, actorId: leader.id, detail: { slot: leader.slot } });
   audit('puzzles_assigned', 'system', { teamId, detail: { players: 4 } });
   emitToTeam(teamId, 'all_players_ready', { teamId, players: 4 });
   emitToTeam(teamId, 'leader_selected', { teamId, leaderSlot: leader.slot });
   broadcastTeam(teamId, 'ready');
-  return { leaderId: leader.id };
+  return { leaderId: armedLeaderId };
 }
 
-export function teamSolvedCount(teamId: number): number {
+export async function teamSolvedCount(teamId: number): Promise<number> {
   return (
-    db.prepare('SELECT COUNT(*) AS c FROM participants WHERE team_id = ? AND solved_at IS NOT NULL').get(teamId) as {
+    await db.prepare('SELECT COUNT(*) AS c FROM participants WHERE team_id = ? AND solved_at IS NOT NULL').get(teamId) as {
       c: number;
     }
   ).c;
 }
 
-export function getTeamState(teamId: number, round: RoundRow): TeamState {
-  const players = getParticipants(teamId);
+export async function getTeamState(teamId: number, round: RoundRow): Promise<TeamState> {
+  const players = await getParticipants(teamId);
   if (round.state === 'ENDED') {
-    const result = db.prepare('SELECT status FROM team_results WHERE team_id = ?').get(teamId) as
+    const result = await db.prepare('SELECT status FROM team_results WHERE team_id = ?').get(teamId) as
       | { status: string }
       | undefined;
     if (result && result.status === 'QUALIFIED') return 'QUALIFIED';
     return 'DISQUALIFIED';
   }
   if (players.length < 4) return 'WAITING_FOR_PLAYERS';
-  const solved = teamSolvedCount(teamId);
+  const solved = await teamSolvedCount(teamId);
   if (solved === 4) {
-    const correct = db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = ? AND was_correct = 1').get(
+    const correct = await db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = ? AND was_correct = 1').get(
       teamId,
     ) as { c: number };
     if (correct.c > 0) return 'COMPLETED';
@@ -343,8 +336,8 @@ export function getTeamState(teamId: number, round: RoundRow): TeamState {
   return solved === 4 ? 'FINAL_SEQUENCE' : 'TEAM_PUZZLES';
 }
 
-export function solvedFlags(teamId: number): { slot: number; solved: boolean }[] {
-  const rows = db
+export async function solvedFlags(teamId: number): Promise<{ slot: number; solved: boolean }[]> {
+  const rows = await db
     .prepare('SELECT slot, solved_at FROM participants WHERE team_id = ? ORDER BY slot')
     .all(teamId) as { slot: number; solved_at: number | null }[];
   return rows.map((row) => ({ slot: row.slot, solved: row.solved_at != null }));
@@ -364,43 +357,45 @@ export interface LiveTeam {
   status: TeamState;
 }
 
-export function liveStatus(): {
+export async function liveStatus(): Promise<{
   serverTime: number;
   round: RoundRow;
   participants: number;
   readyTeams: number;
   teams: LiveTeam[];
-} {
-  const round = refreshRound();
-  const teams = db.prepare('SELECT id, name FROM teams ORDER BY id').all() as { id: number; name: string }[];
-  const totalPlayers = (db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
-  const live: LiveTeam[] = teams.map((team) => {
-    const players = getParticipants(team.id);
-    const leader = players.find((p) => p.is_leader === 1) ?? null;
-    const solved = teamSolvedCount(team.id);
-    const attempts = db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = ?').get(team.id) as {
-      c: number;
-    };
-    const last = db.prepare(
-      'SELECT correct_positions, incorrect_positions FROM final_submissions WHERE team_id = ? ORDER BY submission_number DESC LIMIT 1',
-    ).get(team.id) as { correct_positions: number; incorrect_positions: number } | undefined;
-    const result = db.prepare('SELECT completed_at, completion_time_ms FROM team_results WHERE team_id = ?').get(team.id) as
-      | { completed_at: number | null; completion_time_ms: number | null }
-      | undefined;
-    return {
-      id: team.id,
-      name: team.name,
-      players: players.length,
-      leaderSlot: leader ? leader.slot : null,
-      leaderName: leader ? leader.name : null,
-      solved,
-      finalAttempts: attempts.c,
-      lastFeedback: last ? { correct: last.correct_positions, incorrect: last.incorrect_positions } : null,
-      completedAt: result?.completed_at ?? null,
-      completionTimeMs: result?.completion_time_ms ?? null,
-      status: getTeamState(team.id, round),
-    };
-  });
+}> {
+  const round = await refreshRound();
+  const teams = await db.prepare('SELECT id, name FROM teams ORDER BY id').all() as { id: number; name: string }[];
+  const totalPlayers = (await db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
+  const live: LiveTeam[] = await Promise.all(
+    teams.map(async (team) => {
+      const players = await getParticipants(team.id);
+      const leader = players.find((p) => p.is_leader === 1) ?? null;
+      const solved = await teamSolvedCount(team.id);
+      const attempts = await db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = ?').get(team.id) as {
+        c: number;
+      };
+      const last = await db.prepare(
+        'SELECT correct_positions, incorrect_positions FROM final_submissions WHERE team_id = ? ORDER BY submission_number DESC LIMIT 1',
+      ).get(team.id) as { correct_positions: number; incorrect_positions: number } | undefined;
+      const result = await db.prepare('SELECT completed_at, completion_time_ms FROM team_results WHERE team_id = ?').get(team.id) as
+        | { completed_at: number | null; completion_time_ms: number | null }
+        | undefined;
+      return {
+        id: team.id,
+        name: team.name,
+        players: players.length,
+        leaderSlot: leader ? leader.slot : null,
+        leaderName: leader ? leader.name : null,
+        solved,
+        finalAttempts: attempts.c,
+        lastFeedback: last ? { correct: last.correct_positions, incorrect: last.incorrect_positions } : null,
+        completedAt: result?.completed_at ?? null,
+        completionTimeMs: result?.completion_time_ms ?? null,
+        status: await getTeamState(team.id, round),
+      };
+    }),
+  );
   return {
     serverTime: nowMs(),
     round,
@@ -412,13 +407,13 @@ export function liveStatus(): {
 
 /* ------------------------------------------------------------------ join */
 
-export function joinTeam(
+export async function joinTeam(
   token: string,
   name: string,
   existingParticipantId: string | null,
-): { participant: ParticipantRow; created: boolean; reconnected: boolean } {
-  refreshRound();
-  const team = getTeamByToken(token);
+): Promise<{ participant: ParticipantRow; created: boolean; reconnected: boolean }> {
+  await refreshRound();
+  const team = await getTeamByToken(token);
   if (!team) throw httpError(404, 'This QR code is not valid.', 'invalid_token');
 
   const cleanName = name.trim().replace(/\s+/g, ' ');
@@ -431,29 +426,29 @@ export function joinTeam(
 
   // Existing session: return the same participant (refresh / reconnect).
   if (existingParticipantId) {
-    const existing = db.prepare('SELECT * FROM participants WHERE id = ?').get(existingParticipantId) as
+    const existing = await db.prepare('SELECT * FROM participants WHERE id = ?').get(existingParticipantId) as
       | ParticipantRow
       | undefined;
     if (existing) {
       if (existing.team_id !== team.id) throw httpError(403, 'This device is already registered with another team.', 'other_team');
-      db.prepare('UPDATE participants SET last_seen_at = ?, name = ? WHERE id = ?').run(nowMs(), cleanName, existing.id);
-      const refreshed = db.prepare('SELECT * FROM participants WHERE id = ?').get(existing.id) as unknown as ParticipantRow;
-      if (getParticipants(team.id).length === 4) armTeam(team.id);
+      await db.prepare('UPDATE participants SET last_seen_at = ?, name = ? WHERE id = ?').run(nowMs(), cleanName, existing.id);
+      const refreshed = await db.prepare('SELECT * FROM participants WHERE id = ?').get(existing.id) as unknown as ParticipantRow;
+      if ((await getParticipants(team.id)).length === 4) await armTeam(team.id);
       audit('participant_reconnected', 'participant', { actorId: existing.id, teamId: team.id, detail: { slot: existing.slot } });
       broadcastTeam(team.id, 'reconnected');
       return { participant: refreshed, created: false, reconnected: false };
     }
   }
 
-  const current = getParticipants(team.id);
+  const current = await getParticipants(team.id);
   const byName = current.find((p) => p.name.toLowerCase() === cleanName.toLowerCase());
   if (byName) {
-    // Same name re-scanning on a new/cleared device: hand back the same slot.
-    db.prepare('UPDATE participants SET last_seen_at = ? WHERE id = ?').run(nowMs(), byName.id);
+    // Same name re-scanning on a new/cleared device: hand back the same await slot.
+    await db.prepare('UPDATE participants SET last_seen_at = ? WHERE id = ?').run(nowMs(), byName.id);
     audit('participant_reconnected', 'participant', { actorId: byName.id, teamId: team.id, detail: { slot: byName.slot } });
-    if (getParticipants(team.id).length === 4) armTeam(team.id);
+    if ((await getParticipants(team.id)).length === 4) await armTeam(team.id);
     broadcastTeam(team.id, 'reconnected');
-    return { participant: db.prepare('SELECT * FROM participants WHERE id = ?').get(byName.id) as unknown as ParticipantRow, created: false, reconnected: true };
+    return { participant: await db.prepare('SELECT * FROM participants WHERE id = ?').get(byName.id) as unknown as ParticipantRow, created: false, reconnected: true };
   }
 
   if (current.length >= 4) throw httpError(409, 'This team already has 4 players.', 'team_full');
@@ -464,15 +459,15 @@ export function joinTeam(
 
   const id = `p_${team.id}_${slot}_${randomId()}`;
   const now = nowMs();
-  db.prepare(
+  await db.prepare(
     'INSERT INTO participants (id, team_id, slot, name, is_leader, puzzle_id, joined_at, last_seen_at) VALUES (?, ?, ?, ?, 0, NULL, ?, ?)',
   ).run(id, team.id, slot, cleanName, now, now);
   audit('participant_joined', 'participant', { actorId: id, teamId: team.id, detail: { slot, name: cleanName } });
 
-  const created = db.prepare('SELECT * FROM participants WHERE id = ?').get(id) as unknown as ParticipantRow;
-  if (getParticipants(team.id).length === 4) armTeam(team.id);
+  const created = await db.prepare('SELECT * FROM participants WHERE id = ?').get(id) as unknown as ParticipantRow;
+  if ((await getParticipants(team.id)).length === 4) await armTeam(team.id);
   broadcastTeam(team.id, 'player_joined');
-  emitToTeam(team.id, 'player_joined', { teamId: team.id, players: getParticipants(team.id).length });
+  emitToTeam(team.id, 'player_joined', { teamId: team.id, players: (await getParticipants(team.id)).length });
   return { participant: created, created: true, reconnected: false };
 }
 
@@ -486,8 +481,8 @@ function normalize(value: string): string {
   return value.trim().toLowerCase();
 }
 
-export function submitPuzzleAnswer(participant: ParticipantRow, answer: string): { correct: boolean; token?: string; attempts: number } {
-  const round = refreshRound();
+export async function submitPuzzleAnswer(participant: ParticipantRow, answer: string): Promise<{ correct: boolean; token?: string; attempts: number }> {
+  const round = await refreshRound();
   if (round.ends_at && nowMs() >= round.ends_at) throw httpError(410, "TIME'S UP. Round 1 has ended.", 'time_expired');
   if (round.state !== 'ACTIVE') {
     throw httpError(409, round.state === 'ENDED' ? 'Round 1 has ended.' : 'The round has not started yet.', 'round_not_active');
@@ -499,11 +494,11 @@ export function submitPuzzleAnswer(participant: ParticipantRow, answer: string):
   if (participant.solved_at) throw httpError(409, 'You already solved your puzzle.', 'already_solved');
   if (!participant.puzzle_id) throw httpError(409, 'No puzzle assigned yet.', 'no_puzzle');
 
-  const puzzle = getPuzzleById(participant.puzzle_id);
+  const puzzle = await getPuzzleById(participant.puzzle_id);
   if (!puzzle || puzzle.team_id !== participant.team_id) throw httpError(403, 'Unable to process the request.', 'puzzle_mismatch');
 
   const attemptNumber =
-    (db.prepare('SELECT COUNT(*) AS c FROM puzzle_attempts WHERE participant_id = ?').get(participant.id) as { c: number }).c + 1;
+    (await db.prepare('SELECT COUNT(*) AS c FROM puzzle_attempts WHERE participant_id = ?').get(participant.id) as { c: number }).c + 1;
 
   let alts: string[] = [];
   try {
@@ -516,13 +511,13 @@ export function submitPuzzleAnswer(participant: ParticipantRow, answer: string):
   const expected = [puzzle.answer, ...alts].map(normalize);
   const correct = expected.includes(normalize(clean));
 
-  db.prepare(
+  await db.prepare(
     'INSERT INTO puzzle_attempts (participant_id, team_id, puzzle_id, submitted_answer, correct, attempt_number, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
   ).run(participant.id, participant.team_id, puzzle.id, clean.slice(0, 200), correct ? 1 : 0, attemptNumber, nowMs());
 
   if (correct) {
     const now = nowMs();
-    db.prepare('UPDATE participants SET solved_at = ?, last_seen_at = ? WHERE id = ?').run(now, now, participant.id);
+    await db.prepare('UPDATE participants SET solved_at = ?, last_seen_at = ? WHERE id = ?').run(now, now, participant.id);
     audit('puzzle_solved', 'participant', {
       actorId: participant.id,
       teamId: participant.team_id,
@@ -530,7 +525,7 @@ export function submitPuzzleAnswer(participant: ParticipantRow, answer: string):
     });
     emitToTeam(participant.team_id, 'puzzle_solved', { teamId: participant.team_id, slot: participant.slot });
     broadcastTeam(participant.team_id, 'puzzle_solved');
-    if (teamSolvedCount(participant.team_id) === 4) {
+    if (await teamSolvedCount(participant.team_id) === 4) {
       emitToTeam(participant.team_id, 'team_progress_updated', { teamId: participant.team_id, allSolved: true });
     }
     return { correct: true, token: puzzle.reward_token, attempts: attemptNumber };
@@ -553,21 +548,21 @@ export interface FinalResult {
   duplicate: boolean;
 }
 
-export function submitFinalSequence(participant: ParticipantRow, sequence: string[]): FinalResult {
-  const round = refreshRound();
+export async function submitFinalSequence(participant: ParticipantRow, sequence: string[]): Promise<FinalResult> {
+  const round = await refreshRound();
   if (round.ends_at && nowMs() >= round.ends_at) throw httpError(410, "TIME'S UP. Round 1 has ended.", 'time_expired');
   if (round.state !== 'ACTIVE') {
     throw httpError(409, round.state === 'ENDED' ? 'Round 1 has ended.' : 'The round has not started yet.', 'round_not_active');
   }
   if (participant.is_leader !== 1) throw httpError(403, 'Only the team leader can submit the final sequence.', 'not_leader');
 
-  const players = getParticipants(participant.team_id);
+  const players = await getParticipants(participant.team_id);
   if (players.length < 4) throw httpError(409, 'Your team is not complete yet.', 'team_incomplete');
-  if (teamSolvedCount(participant.team_id) !== 4) {
+  if (await teamSolvedCount(participant.team_id) !== 4) {
     throw httpError(409, 'Your team must solve all four puzzles first.', 'puzzles_incomplete');
   }
 
-  const tokens = teamTokens(participant.team_id);
+  const tokens = await teamTokens(participant.team_id);
   if (sequence.length !== 4) throw httpError(400, 'Submit exactly four tokens.', 'invalid_sequence');
   const unique = new Set(sequence);
   if (unique.size !== 4) throw httpError(400, 'Each token must be used exactly once.', 'invalid_sequence');
@@ -578,7 +573,7 @@ export function submitFinalSequence(participant: ParticipantRow, sequence: strin
   const now = nowMs();
 
   // Duplicate tap protection: identical repeat inside a short window returns the stored result.
-  const last = db
+  const last = await db
     .prepare('SELECT * FROM final_submissions WHERE team_id = ? ORDER BY submission_number DESC LIMIT 1')
     .get(participant.team_id) as
     | {
@@ -601,7 +596,7 @@ export function submitFinalSequence(participant: ParticipantRow, sequence: strin
     };
   }
 
-  const correctSequence = readCorrectSequence(participant.team_id);
+  const correctSequence = await readCorrectSequence(participant.team_id);
   let correct = 0;
   for (let i = 0; i < 4; i += 1) {
     if (sequence[i] === correctSequence[i]) correct += 1;
@@ -611,7 +606,7 @@ export function submitFinalSequence(participant: ParticipantRow, sequence: strin
 
   const submissionNumber = last ? last.submission_number + 1 : 1;
   const elapsed = round.started_at ? now - round.started_at : 0;
-  db.prepare(
+  await db.prepare(
     `INSERT INTO final_submissions
       (team_id, leader_participant_id, submission_number, submitted_sequence, correct_positions, incorrect_positions, was_correct, created_at, elapsed_ms)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -634,13 +629,13 @@ export function submitFinalSequence(participant: ParticipantRow, sequence: strin
   });
 
   if (completed) {
-    db.prepare('UPDATE team_results SET completed_at = ?, completion_time_ms = ?, updated_at = ? WHERE team_id = ?').run(
+    await db.prepare('UPDATE team_results SET completed_at = ?, completion_time_ms = ?, updated_at = ? WHERE team_id = ?').run(
       now,
       elapsed,
       now,
       participant.team_id,
     );
-    computeRankings();
+    await computeRankings();
     audit('team_completed', 'system', { teamId: participant.team_id, detail: { completionTimeMs: elapsed, submissionNumber } });
     emitToTeam(participant.team_id, 'team_completed', { teamId: participant.team_id, completionTimeMs: elapsed });
     emitToAdmins('team_completed', { teamId: participant.team_id, completionTimeMs: elapsed });
@@ -671,13 +666,13 @@ export interface ResultView {
   status: 'QUALIFIED' | 'DISQUALIFIED';
 }
 
-export function getResults(): ResultView[] {
-  refreshRound();
-  const teams = db.prepare('SELECT id, name FROM teams ORDER BY id').all() as { id: number; name: string }[];
-  const rows = teams.map((team) => {
-    const result = (db.prepare('SELECT * FROM team_results WHERE team_id = ?').get(team.id) as ResultRow | undefined) ?? null;
-    const solved = teamSolvedCount(team.id);
-    const attempts = (db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = ?').get(team.id) as { c: number }).c;
+export async function getResults(): Promise<ResultView[]> {
+  await refreshRound();
+  const teams = await db.prepare('SELECT id, name FROM teams ORDER BY id').all() as { id: number; name: string }[];
+  const rows = await Promise.all(teams.map(async (team) => {
+    const result = (await db.prepare('SELECT * FROM team_results WHERE team_id = ?').get(team.id) as ResultRow | undefined) ?? null;
+    const solved = await teamSolvedCount(team.id);
+    const attempts = (await db.prepare('SELECT COUNT(*) AS c FROM final_submissions WHERE team_id = ?').get(team.id) as { c: number }).c;
     return {
       rank: result?.rank ?? 99,
       teamId: team.id,
@@ -688,7 +683,7 @@ export function getResults(): ResultView[] {
       completionTimeMs: result?.completion_time_ms ?? null,
       status: (result?.status === 'QUALIFIED' ? 'QUALIFIED' : 'DISQUALIFIED') as 'QUALIFIED' | 'DISQUALIFIED',
     };
-  });
+  }));
   rows.sort((a, b) => a.rank - b.rank);
   return rows;
 }

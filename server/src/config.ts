@@ -17,7 +17,9 @@ export const config = {
   nodeEnv,
   isProduction: nodeEnv === 'production',
   port: Number(env('PORT', '4000')),
-  databaseUrl: env('DATABASE_URL', './data/endgame.db'),
+  databaseUrl: env('DATABASE_URL', './data/pg'),
+  /** Optional session-mode connection (e.g. Supabase DIRECT_URL) used for migrations. */
+  directUrl: process.env.DIRECT_URL ?? '',
   frontendUrl: env('FRONTEND_URL', 'http://localhost:5173'),
   backendUrl: env('BACKEND_URL', 'http://localhost:4000'),
   // Explicit PUBLIC_BASE_URL wins (pinned domain for printed QRs). When it is

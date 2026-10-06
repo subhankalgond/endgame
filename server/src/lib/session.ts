@@ -34,14 +34,14 @@ export function hashToken(token: string): string {
   return sha256(token);
 }
 
-export function createSession(
+export async function createSession(
   res: Response,
   role: SessionRole,
   refs: { participantId?: string; adminId?: number },
-): string {
+): Promise<string> {
   const token = randomBytes(32).toString('base64url');
   const now = Date.now();
-  db.prepare(
+  await db.prepare(
     `INSERT INTO sessions (token_hash, role, participant_id, admin_id, created_at, expires_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(sha256(token), role, refs.participantId ?? null, refs.adminId ?? null, now, now + config.sessionTtlHours * 3600 * 1000);
@@ -57,22 +57,22 @@ export function readSessionToken(req: { cookies?: unknown }, role: SessionRole):
   return null;
 }
 
-export function lookupSession(role: SessionRole, token: string | null): SessionRow | null {
+export async function lookupSession(role: SessionRole, token: string | null): Promise<SessionRow | null> {
   if (!token) return null;
-  const row = db
+  const row = await db
     .prepare(`SELECT * FROM sessions WHERE token_hash = ? AND role = ?`)
     .get(sha256(token), role) as SessionRow | undefined;
   if (!row) return null;
   if (row.expires_at <= Date.now()) {
-    db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(sha256(token));
+    await db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(sha256(token));
     return null;
   }
   return row;
 }
 
-export function destroySession(role: SessionRole, token: string | null): void {
+export async function destroySession(role: SessionRole, token: string | null): Promise<void> {
   if (!token) return;
-  db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(sha256(token));
+  await db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(sha256(token));
 }
 
 export function clearSessionCookies(res: Response): void {
@@ -81,6 +81,6 @@ export function clearSessionCookies(res: Response): void {
   res.clearCookie(PARTICIPANT_COOKIE, opts);
 }
 
-export function purgeExpiredSessions(): void {
-  db.prepare(`DELETE FROM sessions WHERE expires_at <= ?`).run(Date.now());
+export async function purgeExpiredSessions(): Promise<void> {
+  await db.prepare(`DELETE FROM sessions WHERE expires_at <= ?`).run(Date.now());
 }

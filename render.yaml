@@ -1,21 +1,17 @@
-# Render Blueprint - ENDGAME Round 1 API
-# Create this as a "Blueprint" from the Render dashboard (New -> Blueprint),
-# or copy these settings into a plain Web Service.
+# Render Blueprint - ENDGAME Round 1 API + frontend
+# Create via Render dashboard (New -> Blueprint) from this repo.
 #
-# IMPORTANT:
-#  - A persistent disk is required. On the free plan the disk is ephemeral and
-#    the SQLite database is wiped whenever the service redeploys or sleeps.
-#  - Set PUBLIC_BASE_URL / FRONTEND_URL to your Vercel URL AFTER Vercel deploys
-#    (Dashboard -> Environment), then trigger a manual redeploy.
-#  - ADMIN_PASSWORD must be set in the dashboard (never commit it).
+# DATABASE (Supabase):
+#   The game database lives on Supabase Postgres, so no persistent disk is
+#   needed. After the service is created, open  Environment  and set:
+#     DATABASE_URL = your Supabase transaction-mode pooler URL (port 6543, pgbouncer=true)
+#     DIRECT_URL   = your Supabase session-mode URL (port 5432, used for migrations)
+#   Migrations and seeding run automatically on first boot.
 #
 # QR CODES / PUBLIC URL:
-#  - SINGLE-ORIGIN (recommended, zero config): leave PUBLIC_BASE_URL unset.
-#    The server derives every QR join URL from the host it is served on, so the
-#    printed QRs open the live Render site from any phone, any network.
-#  - VERCEL SPLIT (frontend on Vercel, API here): set BOTH env vars below in
-#    the dashboard to your Vercel URL after Vercel deploys, then redeploy, and
-#    put the Render URL into vercel.json.
+#   Single origin (recommended): leave PUBLIC_BASE_URL unset - every QR join URL
+#   is derived from the host the admin panel is served on.
+#   Vercel split: set PUBLIC_BASE_URL and FRONTEND_URL to your Vercel URL.
 services:
   - type: web
     name: endgame-mainframe
@@ -25,15 +21,9 @@ services:
     startCommand: npm run start -w server
     healthCheckPath: /api/health
     autoDeploy: true
-    disk:
-      name: endgame-db
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
-      - key: DATABASE_URL
-        value: /var/data/endgame.db
       - key: TRUST_PROXY
         value: "1"
       - key: SESSION_TTL_HOURS
@@ -44,8 +34,13 @@ services:
         value: admin
       - key: ADMIN_PASSWORD
         generateValue: true
-      # Vercel split only - uncomment and set both to your Vercel URL:
-      # - key: PUBLIC_BASE_URL
-      #   value: https://your-app.vercel.app
-      # - key: FRONTEND_URL
-      #   value: https://your-app.vercel.app
+      # Set these in the dashboard after the service is created (never commit them):
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      # Vercel split only - leave unset for single-origin Render hosting:
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false

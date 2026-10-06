@@ -1,5 +1,5 @@
 import { randomBytes, randomInt } from 'node:crypto';
-import { db, nowMs, audit } from './db';
+import { db, nowMs, audit, flushAudit } from './db';
 import { hashPassword } from './lib/password';
 import { recordJoinToken } from './tokens';
 import { config } from './config';
@@ -85,59 +85,59 @@ function defaultSequence(tokens: string[]): string {
   return JSON.stringify([tokens[2], tokens[0], tokens[3], tokens[1]]);
 }
 
-export function seedDatabase(): void {
+export async function seedDatabase(): Promise<void> {
   const now = nowMs();
 
-  const existingTeams = (db.prepare('SELECT COUNT(*) AS c FROM teams').get() as { c: number }).c;
+  const existingTeams = (await db.prepare('SELECT COUNT(*) AS c FROM teams').get() as { c: number }).c;
   if (existingTeams === 0) {
-    const insertTeam = db.prepare(
+    const insertTeam = await db.prepare(
       'INSERT INTO teams (id, name, join_token, correct_sequence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
     );
     for (let i = 1; i <= 8; i += 1) {
-      insertTeam.run(i, `Team ${i}`, newJoinToken(), defaultSequence(TEAM_TOKENS[i]), now, now);
-      db.prepare('INSERT OR IGNORE INTO team_results (team_id, updated_at) VALUES (?, ?)').run(i, now);
+      await insertTeam.run(i, `Team ${i}`, newJoinToken(), defaultSequence(TEAM_TOKENS[i]), now, now);
+      await db.prepare('INSERT INTO team_results (team_id, updated_at) VALUES (?, ?) ON CONFLICT DO NOTHING').run(i, now);
     }
     audit('seed_teams_created', 'system', { detail: { teams: 8 } });
   }
 
   for (let i = 1; i <= 8; i += 1) {
-    db.prepare('INSERT OR IGNORE INTO team_results (team_id, updated_at) VALUES (?, ?)').run(i, now);
-    const count = (db.prepare('SELECT COUNT(*) AS c FROM puzzles WHERE team_id = ?').get(i) as { c: number }).c;
+    await db.prepare('INSERT INTO team_results (team_id, updated_at) VALUES (?, ?) ON CONFLICT DO NOTHING').run(i, now);
+    const count = (await db.prepare('SELECT COUNT(*) AS c FROM puzzles WHERE team_id = ?').get(i) as { c: number }).c;
     if (count === 0) {
       const tokens = TEAM_TOKENS[i];
-      const insertPuzzle = db.prepare(
+      const insertPuzzle = await db.prepare(
         `INSERT INTO puzzles (team_id, slot, question, answer, alt_answers, reward_token, difficulty, explanation, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
-      PUZZLES[i].forEach((p, idx) => {
-        insertPuzzle.run(i, idx + 1, p.question, p.answer, JSON.stringify(p.alts), tokens[idx], p.difficulty, p.explanation, now);
-      });
+      for (const [idx, p] of PUZZLES[i].entries()) {
+        await insertPuzzle.run(i, idx + 1, p.question, p.answer, JSON.stringify(p.alts), tokens[idx], p.difficulty, p.explanation, now);
+      }
     }
   }
 
   // Mirror the four reward tokens per team and register the active QR join token.
-  const mirror = db.prepare(
+  const mirror = await db.prepare(
     `INSERT INTO team_tokens (team_id, slot, reward_token, updated_at)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(team_id, slot) DO UPDATE SET reward_token = excluded.reward_token, updated_at = excluded.updated_at`,
   );
-  const teams = db.prepare('SELECT id, join_token FROM teams').all() as { id: number; join_token: string }[];
+  const teams = await db.prepare('SELECT id, join_token FROM teams').all() as { id: number; join_token: string }[];
   for (const team of teams) {
-    const tokens = db
+    const tokens = await db
       .prepare('SELECT slot, reward_token FROM puzzles WHERE team_id = ? ORDER BY slot')
       .all(team.id) as { slot: number; reward_token: string }[];
-    for (const row of tokens) mirror.run(team.id, row.slot, row.reward_token, now);
-    recordJoinToken(team.id, team.join_token, { revokePrevious: false });
+    for (const row of tokens) await mirror.run(team.id, row.slot, row.reward_token, now);
+    await recordJoinToken(team.id, team.join_token, { revokePrevious: false });
   }
 
-  const round = db.prepare('SELECT id FROM rounds WHERE id = 1').get();
+  const round = await db.prepare('SELECT id FROM rounds WHERE id = 1').get();
   if (!round) {
-    db.prepare(
+    await db.prepare(
       'INSERT INTO rounds (id, state, duration_sec, updated_at) VALUES (1, ?, ?, ?)',
     ).run('WAITING', config.roundDurationSec, now);
   }
 
-  const adminCount = (db.prepare('SELECT COUNT(*) AS c FROM admins').get() as { c: number }).c;
+  const adminCount = (await db.prepare('SELECT COUNT(*) AS c FROM admins').get() as { c: number }).c;
   if (adminCount === 0) {
     let password = config.adminPassword;
     let generated = false;
@@ -148,18 +148,17 @@ export function seedDatabase(): void {
       password = randomBytes(9).toString('base64url');
       generated = true;
     }
-    db.prepare('INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)').run(
+    await db.prepare('INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)').run(
       config.adminUsername,
       hashPassword(password),
       now,
     );
     audit('admin_seeded', 'system', { detail: { username: config.adminUsername } });
+    await flushAudit();
     if (generated) {
       console.warn(`[endgame] No ADMIN_PASSWORD set. Generated one-time admin password: ${password}`);
     }
   }
 
-  // Ensure every participant slot rule is enforced even on older databases.
-  db.exec('PRAGMA foreign_keys = ON;');
   void randomInt;
 }

@@ -42,8 +42,8 @@ export function roundView(round: RoundRow): {
   };
 }
 
-export function playerViews(teamId: number): PlayerView[] {
-  const joined = getParticipants(teamId);
+export async function playerViews(teamId: number): Promise<PlayerView[]> {
+  const joined = await getParticipants(teamId);
   const bySlot = new Map(joined.map((p) => [p.slot, p]));
   return [1, 2, 3, 4].map((slot) => {
     const p = bySlot.get(slot);
@@ -61,20 +61,20 @@ export function playerViews(teamId: number): PlayerView[] {
  * The only payload a participant ever receives: their own puzzle, their own
  * token, team roster state and server timing. Never the correct sequence.
  */
-export function participantPayload(participant: ParticipantRow): Record<string, unknown> {
-  const round = refreshRound();
-  const team = getTeam(participant.team_id);
-  const puzzle: PuzzleRow | null = participant.puzzle_id ? getPuzzleById(participant.puzzle_id) : null;
-  const solvedCount = teamSolvedCount(team.id);
+export async function participantPayload(participant: ParticipantRow): Promise<Record<string, unknown>> {
+  const round = await refreshRound();
+  const team = await getTeam(participant.team_id);
+  const puzzle: PuzzleRow | null = participant.puzzle_id ? await getPuzzleById(participant.puzzle_id) : null;
+  const solvedCount = await teamSolvedCount(team.id);
   const allSolved = solvedCount === 4;
   const attempts = (
-    db.prepare('SELECT COUNT(*) AS c FROM puzzle_attempts WHERE participant_id = ?').get(participant.id) as { c: number }
+    await db.prepare('SELECT COUNT(*) AS c FROM puzzle_attempts WHERE participant_id = ?').get(participant.id) as { c: number }
   ).c;
 
   return {
     serverTime: Date.now(),
     round: roundView(round),
-    state: getTeamState(team.id, round),
+    state: await getTeamState(team.id, round),
     team: { id: team.id, name: team.name },
     participant: {
       slot: participant.slot,
@@ -82,7 +82,7 @@ export function participantPayload(participant: ParticipantRow): Record<string, 
       isLeader: participant.is_leader === 1,
       solvedAt: participant.solved_at,
     },
-    players: playerViews(team.id),
+    players: await playerViews(team.id),
     puzzle: puzzle
       ? {
           slot: participant.slot,
@@ -96,21 +96,21 @@ export function participantPayload(participant: ParticipantRow): Record<string, 
       solvedCount,
       allSolved,
       // Only the four earned tokens are shared once the whole team is done.
-      teamTokens: allSolved ? teamTokens(team.id) : null,
+      teamTokens: allSolved ? await teamTokens(team.id) : null,
     },
-    result: resultView(team.id),
+    result: await resultView(team.id),
     attempts,
   };
 }
 
 /** Completion record for this team; null until the team finishes. */
-export function resultView(teamId: number): {
+export async function resultView(teamId: number): Promise<{
   completedAt: number | null;
   completionTimeMs: number | null;
   rank: number | null;
   status: string;
-} | null {
-  const row = db.prepare(
+} | null> {
+  const row = await db.prepare(
     'SELECT completed_at, completion_time_ms, rank, status FROM team_results WHERE team_id = ?',
   ).get(teamId) as
     | { completed_at: number | null; completion_time_ms: number | null; rank: number | null; status: string }
@@ -124,13 +124,13 @@ export function resultView(teamId: number): {
   };
 }
 
-export function statusPayload(participant: ParticipantRow): Record<string, unknown> {
-  const round = refreshRound();
-  const team = getTeam(participant.team_id);
+export async function statusPayload(participant: ParticipantRow): Promise<Record<string, unknown>> {
+  const round = await refreshRound();
+  const team = await getTeam(participant.team_id);
   return {
     team: { id: team.id, name: team.name },
-    state: getTeamState(team.id, round),
-    players: playerViews(team.id),
+    state: await getTeamState(team.id, round),
+    players: await playerViews(team.id),
     round: roundView(round),
   };
 }
@@ -139,6 +139,6 @@ export function resultsVisibility(round: RoundRow): boolean {
   return round.state === 'ENDED';
 }
 
-export function currentRound(): RoundRow {
-  return getRound();
+export async function currentRound(): Promise<RoundRow> {
+  return await getRound();
 }

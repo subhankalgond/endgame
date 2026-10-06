@@ -75,24 +75,24 @@ describe('admin security', () => {
 
   it('keeps database internals out of participant payloads', async () => {
     const agent = request.agent(ctx.app);
-    await agent.post(`/api/join/${joinToken(ctx.db, 7)}`).send({ name: 'Leak Probe' });
+    await agent.post(`/api/join/${await joinToken(ctx.db, 7)}`).send({ name: 'Leak Probe' });
     const res = await agent.get('/api/session');
     const text = JSON.stringify(res.body);
     expect(text).not.toContain('scrypt$');
     expect(text).not.toContain('join_token');
     expect(text).not.toContain('joinToken');
     for (let team = 1; team <= 8; team += 1) {
-      expect(text).not.toContain(joinToken(ctx.db, team));
+      expect(text).not.toContain(await joinToken(ctx.db, team));
     }
   });
 
   it('stores injected input as inert text', async () => {
-    const before = (ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
+    const before = (await ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
     const res = await request(ctx.app)
-      .post(`/api/join/${joinToken(ctx.db, 6)}`)
+      .post(`/api/join/${await joinToken(ctx.db, 6)}`)
       .send({ name: "Robert'); DROP TABLE participants;--" });
     expect(res.status).toBe(400);
-    const after = (ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
+    const after = (await ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
     expect(after).toBe(before);
   });
 });
@@ -120,7 +120,7 @@ describe('admin configuration', () => {
       .put('/api/admin/teams/1/sequence')
       .send({ sequence: ['72', '8x', '0a', '7k4'] });
     expect(valid.status).toBe(200);
-    expect(correctSequence(ctx.db, 1)).toEqual(['72', '8x', '0a', '7k4']);
+    expect(await correctSequence(ctx.db, 1)).toEqual(['72', '8x', '0a', '7k4']);
     // restore the documented default for the rest of the run
     await admin.put('/api/admin/teams/1/sequence').send({ sequence: ['8x', '7k4', '72', '0a'] });
   });
@@ -147,7 +147,7 @@ describe('admin configuration', () => {
     expect(found.altAnswers).toEqual(['forty two']);
     expect(found.rewardToken).toBe('ZZ9');
     // the team_tokens table used for final-sequence validation follows the edit
-    const mirrored = ctx.db.prepare('SELECT reward_token FROM team_tokens WHERE team_id = 3 AND slot = 1').get() as {
+    const mirrored = await ctx.db.prepare('SELECT reward_token FROM team_tokens WHERE team_id = 3 AND slot = 1').get() as {
       reward_token: string;
     };
     expect(mirrored.reward_token).toBe('ZZ9');
@@ -164,7 +164,7 @@ describe('admin configuration', () => {
       difficulty: 'easy',
       explanation: 'Counting in 3s.',
     });
-    const restored = ctx.db.prepare('SELECT reward_token FROM team_tokens WHERE team_id = 3 AND slot = 1').get() as {
+    const restored = await ctx.db.prepare('SELECT reward_token FROM team_tokens WHERE team_id = 3 AND slot = 1').get() as {
       reward_token: string;
     };
     expect(restored.reward_token).toBe('a07');
@@ -180,13 +180,13 @@ describe('admin configuration', () => {
     for (const item of res.body.items) {
       expect(item.qr).toMatch(/^data:image\/png;base64,/);
       expect(item.joinUrl).toContain('/join/team/');
-      const token = joinToken(ctx.db, item.id);
+      const token = await joinToken(ctx.db, item.id);
       expect(item.joinUrl.endsWith(token)).toBe(true);
       expect(token.length).toBeGreaterThanOrEqual(30);
       expect(token).not.toMatch(/^(team|Team)/);
     }
 
-    const oldToken = joinToken(ctx.db, 4);
+    const oldToken = await joinToken(ctx.db, 4);
     const regen = await admin.post('/api/admin/qr/regenerate').send({ teamId: 4 });
     expect(regen.status).toBe(200);
     expect(regen.body.joinUrl).not.toContain(oldToken);
@@ -195,12 +195,12 @@ describe('admin configuration', () => {
     expect(stale.status).toBe(404);
 
     // token history: the rotated token is revoked, the new one is active
-    const oldRow = ctx.db.prepare('SELECT active, revoked_at FROM team_join_tokens WHERE token = ?').get(oldToken) as
+    const oldRow = await ctx.db.prepare('SELECT active, revoked_at FROM team_join_tokens WHERE token = ?').get(oldToken) as
       | { active: number; revoked_at: number | null }
       | undefined;
     expect(oldRow?.active).toBe(0);
     expect(oldRow?.revoked_at).not.toBeNull();
-    const newRow = ctx.db
+    const newRow = await ctx.db
       .prepare('SELECT active FROM team_join_tokens WHERE token = ?')
       .get(regen.body.joinUrl.split('/join/team/')[1]) as { active: number } | undefined;
     expect(newRow?.active).toBe(1);
@@ -211,11 +211,11 @@ describe('admin configuration', () => {
     });
     expect(fresh.status).toBe(201);
     expect(fresh.body.team.id).toBe(4);
-    ctx.db.prepare('DELETE FROM participants WHERE name = ?').run('Fresh Scanner');
+    await ctx.db.prepare('DELETE FROM participants WHERE name = ?').run('Fresh Scanner');
   });
 
-  it('keeps team_tokens and active join tokens consistent for the whole event', () => {
-    const rows = ctx.db
+  it('keeps team_tokens and active join tokens consistent for the whole event', async () => {
+    const rows = await ctx.db
       .prepare(
         `SELECT p.team_id, p.slot, p.reward_token AS puzzle_token, t.reward_token AS team_token
          FROM puzzles p JOIN team_tokens t ON t.team_id = p.team_id AND t.slot = p.slot`,
@@ -224,22 +224,22 @@ describe('admin configuration', () => {
     expect(rows).toHaveLength(32);
     for (const row of rows) expect(row.team_token).toBe(row.puzzle_token);
 
-    const active = ctx.db.prepare('SELECT COUNT(*) AS c FROM team_join_tokens WHERE active = 1').get() as {
+    const active = await ctx.db.prepare('SELECT COUNT(*) AS c FROM team_join_tokens WHERE active = 1').get() as {
       c: number;
     };
     expect(active.c).toBe(8);
-    const withTeam = ctx.db.prepare('SELECT COUNT(DISTINCT team_id) AS c FROM team_join_tokens WHERE active = 1').get() as {
+    const withTeam = await ctx.db.prepare('SELECT COUNT(DISTINCT team_id) AS c FROM team_join_tokens WHERE active = 1').get() as {
       c: number;
     };
     expect(withTeam.c).toBe(8);
 
     // every team's configured correct sequence is a permutation of its own tokens
-    const teams = ctx.db.prepare('SELECT id, correct_sequence FROM teams ORDER BY id').all() as {
+    const teams = await ctx.db.prepare('SELECT id, correct_sequence FROM teams ORDER BY id').all() as {
       id: number;
       correct_sequence: string;
     }[];
     for (const team of teams) {
-      const tokens = ctx.db
+      const tokens = await ctx.db
         .prepare('SELECT reward_token FROM team_tokens WHERE team_id = ? ORDER BY slot')
         .all(team.id) as { reward_token: string }[];
       const sequence = JSON.parse(team.correct_sequence) as string[];
@@ -269,7 +269,7 @@ describe('round control, ranking and reset', () => {
 
   it('locks gameplay while active results stay hidden', async () => {
     const agent = request.agent(ctx.app);
-    await agent.post(`/api/join/${joinToken(ctx.db, 6)}`).send({ name: 'Result Watcher' });
+    await agent.post(`/api/join/${await joinToken(ctx.db, 6)}`).send({ name: 'Result Watcher' });
     const res = await agent.get('/api/results');
     expect(res.status).toBe(409);
   });
@@ -288,13 +288,13 @@ describe('round control, ranking and reset', () => {
     ];
 
     // start from a clean field so exactly 32 participants join
-    ctx.db.prepare('DELETE FROM participants').run();
-    expect((ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c).toBe(0);
+    await ctx.db.prepare('DELETE FROM participants').run();
+    expect((await ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c).toBe(0);
 
     for (const entry of plan) {
       const agents = await fillTeam(ctx, entry.teamId, entry.names);
       for (let slot = 1; slot <= entry.solve; slot += 1) {
-        const answer = (ctx.db.prepare('SELECT answer FROM puzzles WHERE team_id = ? AND slot = ?').get(
+        const answer = (await ctx.db.prepare('SELECT answer FROM puzzles WHERE team_id = ? AND slot = ?').get(
           entry.teamId,
           slot,
         ) as { answer: string }).answer;
@@ -303,17 +303,17 @@ describe('round control, ranking and reset', () => {
         expect(res.body.correct).toBe(true);
       }
       if (entry.solve === 4) {
-        const leader = agents[leaderIndex(ctx.db, entry.teamId)];
+        const leader = agents[await leaderIndex(ctx.db, entry.teamId)];
         const res = await leader
           .post('/api/team/final-submit')
-          .send({ sequence: correctSequence(ctx.db, entry.teamId) });
+          .send({ sequence: await correctSequence(ctx.db, entry.teamId) });
         expect(res.status).toBe(200);
         expect(res.body.completed).toBe(true);
         await new Promise((r) => setTimeout(r, 15));
       }
     }
 
-    const joined = (ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
+    const joined = (await ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
     expect(joined).toBe(32);
 
     const live = await (await adminAgent(ctx)).get('/api/admin/live-status');
@@ -356,7 +356,7 @@ describe('round control, ranking and reset', () => {
 
     // participants can read the standings once the round ends
     const agent = request.agent(ctx.app);
-    await agent.post(`/api/join/${joinToken(ctx.db, 2)}`).send({ name: 'T2 A' });
+    await agent.post(`/api/join/${await joinToken(ctx.db, 2)}`).send({ name: 'T2 A' });
     const shown = await agent.get('/api/results');
     expect(shown.status).toBe(200);
     expect(shown.body.results).toHaveLength(8);
@@ -395,7 +395,7 @@ describe('round control, ranking and reset', () => {
 
     const noConfirm = await admin.post('/api/admin/round/reset').send({});
     expect(noConfirm.status).toBe(400);
-    const stillThere = (ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
+    const stillThere = (await ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c;
     expect(stillThere).toBeGreaterThan(0);
 
     const ok = await admin.post('/api/admin/round/reset').send({ confirm: true });
@@ -404,16 +404,16 @@ describe('round control, ranking and reset', () => {
     expect(ok.body.round.startedAt).toBeNull();
     expect(ok.body.round.endsAt).toBeNull();
 
-    expect((ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c).toBe(0);
-    expect((ctx.db.prepare('SELECT COUNT(*) AS c FROM puzzle_attempts').get() as { c: number }).c).toBe(0);
-    expect((ctx.db.prepare('SELECT COUNT(*) AS c FROM final_submissions').get() as { c: number }).c).toBe(0);
+    expect((await ctx.db.prepare('SELECT COUNT(*) AS c FROM participants').get() as { c: number }).c).toBe(0);
+    expect((await ctx.db.prepare('SELECT COUNT(*) AS c FROM puzzle_attempts').get() as { c: number }).c).toBe(0);
+    expect((await ctx.db.prepare('SELECT COUNT(*) AS c FROM final_submissions').get() as { c: number }).c).toBe(0);
 
     // configuration survives
-    expect((ctx.db.prepare('SELECT COUNT(*) AS c FROM teams').get() as { c: number }).c).toBe(8);
-    expect((ctx.db.prepare('SELECT COUNT(*) AS c FROM puzzles').get() as { c: number }).c).toBe(32);
-    expect((ctx.db.prepare('SELECT COUNT(*) AS c FROM admins').get() as { c: number }).c).toBeGreaterThanOrEqual(1);
-    expect((ctx.db.prepare('SELECT COUNT(*) AS c FROM audit_logs').get() as { c: number }).c).toBeGreaterThan(0);
-    const result = ctx.db.prepare('SELECT status, rank FROM team_results WHERE team_id = 1').get() as {
+    expect((await ctx.db.prepare('SELECT COUNT(*) AS c FROM teams').get() as { c: number }).c).toBe(8);
+    expect((await ctx.db.prepare('SELECT COUNT(*) AS c FROM puzzles').get() as { c: number }).c).toBe(32);
+    expect((await ctx.db.prepare('SELECT COUNT(*) AS c FROM admins').get() as { c: number }).c).toBeGreaterThanOrEqual(1);
+    expect((await ctx.db.prepare('SELECT COUNT(*) AS c FROM audit_logs').get() as { c: number }).c).toBeGreaterThan(0);
+    const result = await ctx.db.prepare('SELECT status, rank FROM team_results WHERE team_id = 1').get() as {
       status: string;
       rank: number | null;
     };
@@ -422,7 +422,7 @@ describe('round control, ranking and reset', () => {
 
     // participant sessions from before the reset are dead
     const stale = request.agent(ctx.app);
-    await stale.post(`/api/join/${joinToken(ctx.db, 1)}`).send({ name: 'Post Reset' });
+    await stale.post(`/api/join/${await joinToken(ctx.db, 1)}`).send({ name: 'Post Reset' });
     const sessionBefore = await stale.get('/api/session');
     expect(sessionBefore.status).toBe(200);
     await admin.post('/api/admin/round/reset').send({ confirm: true });
